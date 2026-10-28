@@ -1,6 +1,40 @@
 import cv2
 import numpy as np
 
+def main2():
+    image = cv2.imread(r"C:\Users\Bryan Bascos\Desktop\test.png")
+    image = cv2.resize(image, None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC)
+    cv2.imshow('', image)
+    cv2.waitKey(0)
+
+    grayscale = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    ret, thresh1 = cv2.threshold(grayscale, 20, 255, cv2.THRESH_TOZERO)
+    cv2.imshow('', thresh1)
+    cv2.waitKey(0)
+
+    contours, _ = cv2.findContours(thresh1, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    for i, ctr in enumerate(contours):
+        (x,y), radius = cv2.minEnclosingCircle(ctr)
+        print(x,y,radius)
+
+        cropped = image[int(y-radius):int(y+radius), int(x-radius):int(x+radius)]
+        cv2.imshow('', cropped)
+        cv2.waitKey(0)
+
+        blue_hist = cv2.calcHist([cropped], [0], None, [256], [0,256])
+        green_hist = cv2.calcHist([cropped], [1], None, [256], [0,256])
+        red_hist = cv2.calcHist([cropped], [2], None, [256], [0,256])
+    
+        weights = [i for i in range(0,256)]
+        blue_ave = np.average(blue_hist, weights=weights).item()
+        green_ave = np.average(green_hist, weights=weights).item()
+        red_ave = np.average(red_hist, weights=weights).item()
+    
+        red = round(100 * red_ave / (blue_ave + red_ave + green_ave), 2)
+        green = round(100 * green_ave / (blue_ave + red_ave + green_ave), 2)
+        blue = round(100 * blue_ave / (blue_ave + red_ave + green_ave), 2)
+        print(f"--- comp {red:.5f}, {green:.5f}, {blue:.5f}")
+
 def main(cap):
     for i in range(10):
         ret, frame = cap.read()
@@ -57,6 +91,33 @@ def mtf_test():
     print(found_idx)
     plt.show()
 
+def get_final_status(test_name: str, raw_values: dict):
+    import json
+    with open('limits.json', 'r') as limits_file:
+        test_limits = json.load(limits_file)
+
+    params_list = test_limits.get(test_name)
+    status = 1
+    for key, value in raw_values.items():
+        param_name = key.split('_')[-1]
+        limits = params_list.get(param_name)
+        print(key, value, limits)
+        if not limits:
+            continue
+        
+        if 'maximum' in limits:
+            if value > float(limits['maximum']):
+                status -= 1
+        if 'minimum' in limits:
+            if value < float(limits['minimum']):
+                status -= 1
+    
+    if status < 0:
+        status = 0
+
+    print('final:', status)
+    return status
+
 def http_api_test():
     import requests
     import json
@@ -109,5 +170,9 @@ def http_api_test():
 
 if __name__=="__main__":
     # other_main()
-    http_api_test()
+    # http_api_test()
     # mtf_test()
+    results = {'lf80_reso': -1, 'lf80_contrast': 0.897, 
+                'lf80_r2g': 1, 'lf80_b2g': 1, 
+                'lf80_snr': 2.98765, 'lf80_dotgrid': -1}
+    get_final_status('lit_frame_80mm', results)

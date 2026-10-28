@@ -87,7 +87,7 @@ class Bluetooth(QWidget):
         self.mac_object = QtBt.QBluetoothAddress(mac_address)
 
     def auto_abort(self):
-        # self.parent().messages.setText('BLE FAIL')
+        # self.parent().progress_msg.setText('BLE FAIL')
         # self.fail_reason.emit('NO_BLE')
         # self.abortAll()
         pass
@@ -172,7 +172,7 @@ class Bluetooth(QWidget):
             str_ip = '.'.join(raw_ip)
 
             self.final_ip_addr = str_ip
-            self.parent().messages.setText(f"FOUND IP: {str_ip}")
+            self.parent().progress_msg.setText(f"FOUND IP: {str_ip}")
             self.ip_addr_found.emit(str_ip)
             QTimer.singleShot(0, self.process_end)
 
@@ -180,7 +180,7 @@ class Bluetooth(QWidget):
         self.auto_abort_timer.start()
         # print('--- callback', info.uuid().toString(), 'says', value)
         if info == self.char_dict['conn'] and value == b"\x04":
-            self.parent().messages.setText('READING IP ADDRESS...')
+            self.parent().progress_msg.setText('READING IP ADDRESS...')
             self.progress_status.emit('Reading IP Address...')
             self.wifi_serv.characteristicRead.connect(self.write_ip)
             self.wifi_serv.readCharacteristic(self.char_dict['ip'])
@@ -221,7 +221,7 @@ class Bluetooth(QWidget):
         # self.wifi_serv.writeCharacteristic(self.char_dict['conn'], b"\x01")
         self.wifi_serv.writeCharacteristic(self.char_dict['conn'], b"\x04") # Apply ssid and password
 
-        self.parent().messages.setText('WRITING ACCESS POINT DETAILS...')
+        self.parent().progress_msg.setText('WRITING ACCESS POINT DETAILS...')
         self.progress_status.emit('Writing AP Mode details...')
 
     def done_disc(self):
@@ -247,14 +247,14 @@ class Bluetooth(QWidget):
         # print('paired?', stat)
 
         # print('--- service discovery')
-        self.parent().messages.setText('FINDING SERVICES...')
+        self.parent().progress_msg.setText('FINDING SERVICES...')
         self.progress_status.emit('Finding services...')
         self.receiver.discoveryFinished.connect(self.done_disc)
         self.receiver.discoverServices()
 
     def dut_pairing(self):
         self.auto_abort_timer.start()
-        self.parent().messages.setText('PAIRING...')
+        self.parent().progress_msg.setText('PAIRING...')
         self.progress_status.emit('Pairing...')
         if self.local_device.pairingStatus(self.mac_object) == QtBt.QBluetoothLocalDevice.Pairing.Unpaired:
             # print('--- pairing')
@@ -271,14 +271,14 @@ class Bluetooth(QWidget):
             return
 
         self.scanner.stop()
-        self.parent().messages.setText('DEVICE FOUND!')
+        self.parent().progress_msg.setText('DEVICE FOUND!')
         dut_obj.setCached(False)
         dut_obj.setCoreConfigurations(QtBt.QBluetoothDeviceInfo.CoreConfiguration.LowEnergyCoreConfiguration)
 
         self.receiver = QtBt.QLowEnergyController.createCentral(dut_obj, self)
         self.receiver.errorOccurred.connect(self.controller_error)
         
-        self.parent().messages.setText('CONNECTING...')
+        self.parent().progress_msg.setText('CONNECTING...')
         self.progress_status.emit('Connecting to device...')
         self.receiver.connected.connect(self.dut_pairing)
         self.receiver.connectToDevice()
@@ -291,7 +291,7 @@ class Bluetooth(QWidget):
         for dev in discovered:
             print(dev.address().toString(), dev.name())
             if dev.address() == self.mac_object:
-                self.parent().messages.setText('DEVICE FOUND!')
+                self.parent().progress_msg.setText('DEVICE FOUND!')
                 QTimer.singleShot(1, lambda: self.dut_connect(dev))
                 return True
 
@@ -306,7 +306,7 @@ class Bluetooth(QWidget):
         self.timer.start()
         self.auto_abort_timer.start()
         self.final_ip_addr = ''
-        self.parent().messages.setText('SCANNING FOR DEVICE...')
+        self.parent().progress_msg.setText('SCANNING FOR DEVICE...')
         self.progress_status.emit('Scanning for device...')
         self.scanner.start(QtBt.QBluetoothDeviceDiscoveryAgent.DiscoveryMethod.LowEnergyMethod)
 
@@ -773,7 +773,6 @@ class StackedUI(QDialog):
         self.strm_pixlabel.clear()
 
     def dft_start(self, serial_num, cam_name, content):
-        self.df_results = {}
         self.camera_name_dft.setText(cam_name.upper())
         self.s2_dft.setChecked(True)
         pixmap = QPixmap()
@@ -788,35 +787,28 @@ class StackedUI(QDialog):
         
         # measure luminance
         average_luminance = np.average(grayscale, axis=(0,1)).item()
-        # if average_luminance >= self.test_limits['dark_frame_test']['lumi']['maximum']:
-        #     dft_status -= 1
+        
         # measure hot pixels
         hot_pixels = int(mono_hist[255])
+
         # snr
         mean_val, std_dev = cv2.meanStdDev(grayscale)
         mean_val = mean_val[0][0]
         std_dev = std_dev[0][0]
 
-        if std_dev == 0:
-            snr_db = float('inf')
-        else:
+        if std_dev != 0:
             snr_db = 20 * np.log10(mean_val / std_dev)
+        else:
+            snr_db = float('inf')
 
-        # if snr_db < self.test_limits['dark_frame_test']['snr']['maximum']:
-        #     dft_status -= 1
-
-        self.df_results = {'lum': round(average_luminance, 2), 'snr': round(snr_db.item(), 2)}
-        # print(self.df_results)
+        # self.df_results = {'lum': round(average_luminance, 2), 'snr': round(snr_db.item(), 2)}
         
         alt_results = {'df_lumi': round(average_luminance, 2), 'df_snr': round(snr_db.item(), 2)}
         self.alt_signal.emit(alt_results)
-        # if dft_status < 1:
-        #     dft_status = 0
-        dft_status = 1
+        dft_status = self.get_final_status('dark_frame_test', alt_results)
         self.done_measure.emit(cam_name, 'dark', dft_status)
 
     def lft_start(self, serial_num, cam_name, distance, content):
-        self.lf_results = {}
         pixmap = QPixmap()
         pixmap.loadFromData(content)
         raw_image = self.bytesToImage(content)
@@ -836,6 +828,7 @@ class StackedUI(QDialog):
         if distance == 110:
             average_luminance = np.average(grayscale, axis=(0,1)).item()
             self.led_okay.emit(average_luminance)
+        
         mono_hist = cv2.calcHist([grayscale], [0], None, [256], [0,256])
         # blue_hist = cv2.calcHist([self.raw_image], [0], None, [256], [0,256])
         # green_hist = cv2.calcHist([self.raw_image], [1], None, [256], [0,256])
@@ -880,28 +873,48 @@ class StackedUI(QDialog):
         mean_val = mean_val[0][0]
         std_dev = std_dev[0][0]
 
-        if std_dev == 0:
-            snr_db = float('inf')
-        else:
+        if std_dev != 0:
             snr_db = 20 * np.log10(mean_val / std_dev)
+        else:
+            snr_db = float('inf')
 
-        self.lf_results = {'resolution': -1, 'light_balance': -1, 'contrast': m_cont, 
-                            'r2g_ratio': r2g_ratio, 'b2g_ratio': b2g_ratio, 
-                            'snr': round(snr_db.item(), 2), 'dead_pixels': num_dead_pixels, 'dot_count': -1}
-        # print(self.lf_results)
-        lft_status = 1
+        # self.lf_results = {'resolution': -1, 'light_balance': -1, 'contrast': m_cont, 
+        #                     'r2g_ratio': r2g_ratio, 'b2g_ratio': b2g_ratio, 
+        #                     'snr': round(snr_db.item(), 2), 'dead_pixels': num_dead_pixels, 'dot_count': -1}
+        
         if distance == 80:
             alt_results = {'lf80_reso': -1, 'lf80_contrast': m_cont, 
                                 'lf80_r2g': r2g_ratio, 'lf80_b2g': b2g_ratio, 
                                 'lf80_snr': round(snr_db.item(), 2), 'lf80_dotgrid': -1}
-            self.done_measure.emit(cam_name, 'lit_80', lft_status)
         elif distance == 110:
             alt_results = {'lf110_reso': -1, 'lf110_contrast': m_cont, 
                                 'lf110_r2g': r2g_ratio, 'lf110_b2g': b2g_ratio, 
                                 'lf110_snr': round(snr_db.item(), 2), 'lf110_dotgrid': -1}
-            self.done_measure.emit(cam_name, 'lit_110', lft_status)
+
+        self.alt_signal.emit(alt_results)
+        lft_status = self.get_final_status(f'lit_frame_{distance}mm', alt_results)
+        self.done_measure.emit(cam_name, f'lit_{distance}', lft_status)
+
+    def get_final_status(self, test_name: str, raw_values: dict):
+        params_list = self.test_limits.get(test_name)
+        status = 1
+        for key, value in raw_values.items():
+            param_name = key.split('_')[-1]
+            limits = params_list.get(param_name)
+            print(key, value, limits)
+            if not limits:
+                continue
+
+            if 'maximum' in limits:
+                if value > float(limits['maximum']):
+                    status -= 1
+            if 'minimum' in limits:
+                if value < float(limits['minimum']):
+                    status -= 1
         
-        self.alt_signal.emit(alt_results)    
+        if status < 0:
+            status = 0
+        return status
 
     def stream_start(self, link: str):
         self.s5_stream.setChecked(True)

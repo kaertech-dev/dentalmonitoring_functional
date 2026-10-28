@@ -55,9 +55,9 @@ class MainWindow(QMainWindow):
         self.tableView.setModel(self.tableModel)
         self.init_test_variables()
 
-        self.relay_off_cmd = ['daq/TSD_DAQ.exe', '--port', 'D',  '--execute', '0']
-        res = subprocess.run(self.relay_off_cmd)
-        self.relay_on_cmd = ['daq/TSD_DAQ.exe', '--port', 'D',  '--execute', '1']
+        # self.relay_off_cmd = ['daq/TSD_DAQ.exe', '--port', 'D',  '--execute', '0']
+        # res = subprocess.run(self.relay_off_cmd)
+        # self.relay_on_cmd = ['daq/TSD_DAQ.exe', '--port', 'D',  '--execute', '1']
 
         self.auto_abort_timer = QTimer()
         self.auto_abort_timer.setInterval(1000 * 30)
@@ -154,8 +154,11 @@ class MainWindow(QMainWindow):
     def connect_port(self):
         try:
             self.hw_serial = serial.Serial(port = self.config['hw_port'], baudrate = int(self.config['baud_rate']))
-            self.hw_serial.write(b'OUT1\r\n')
-            self.hw_serial.flush()
+            # self.hw_serial.write(b'OUT1\r\n')
+            # self.hw_serial.write(b'OUT0\r\n')
+            # self.hw_serial.flush()
+            self.hw_serial.reset_input_buffer()
+            self.hw_serial.reset_output_buffer()
             self.messages.setText(f'POWER SUPPLY AT {self.config["hw_port"]}')
             # self.hw_timer.start(1000)
         except:
@@ -197,6 +200,30 @@ class MainWindow(QMainWindow):
             self.hw_serial.flush()
             response = self.hw_serial.readline().decode('ascii', errors='ignore').strip()
             return None
+
+    def enable_supply(self):
+        if not self.hw_serial:
+            return None
+        try:
+            self.hw_serial.reset_input_buffer()
+            self.hw_serial.reset_output_buffer()
+            self.hw_serial.write(b'OUT1\r\n')
+            self.hw_serial.flush()
+            # response = self.hw_serial.readline().decode('ascii', errors='ignore').strip()
+        except:
+            pass
+
+    def disable_supply(self):
+        if not self.hw_serial:
+            return None
+        try:
+            self.hw_serial.reset_input_buffer()
+            self.hw_serial.reset_output_buffer()
+            self.hw_serial.write(b'OUT0\r\n')
+            self.hw_serial.flush()
+            # response = self.hw_serial.readline().decode('ascii', errors='ignore').strip()
+        except:
+            pass
 
     def abort_signal(self):
         self.auto_abort_timer.stop()
@@ -402,7 +429,8 @@ class MainWindow(QMainWindow):
                 self.append_result('chrg_current', -1, 'FAIL', 'CHARGE_FAIL')
             
             self.bringup_results['chrg_curr'] = curr_meas
-            resp_off = subprocess.run(self.relay_off_cmd)
+            # resp_off = subprocess.run(self.relay_off_cmd)
+            self.disable_supply()
 
             # if self.stacker.wifi_widget.restored:
             #     QTimer.singleShot(1, self.process_values)
@@ -417,7 +445,8 @@ class MainWindow(QMainWindow):
             self.auto_abort_timer.start()
             print('Step 8 start')
             # self.hw_timer.start(1000)
-            resp_on = subprocess.run(self.relay_on_cmd)
+            # resp_on = subprocess.run(self.relay_on_cmd)
+            self.enable_supply()
             try:
                 self.stacker.done_stream.disconnect(self.close_stream)
             except TypeError:
@@ -893,7 +922,7 @@ class MainWindow(QMainWindow):
             self.http_manager.get('status', 
                                 f'http://{self.device_ip}/status', 
                                 self.read_device_status,
-                                1800)
+                                1500)
         except:
             pass
 
@@ -936,9 +965,11 @@ class MainWindow(QMainWindow):
                 val = self.validate_serial()
                 if not val:
                     return
-
+            
             self.stacker.reset_holders()
-            resp_off = subprocess.run(self.relay_off_cmd)
+            # resp_off = subprocess.run(self.relay_off_cmd)
+            self.disable_supply()
+
             self.head_details['serial_num'] = self.current_serial
             self.head_details['po_num'] = self.ponum_display.text()
             if len(self.config['tester_code']) > 0:
@@ -960,16 +991,11 @@ class MainWindow(QMainWindow):
             self.camera_list = ['center']
             if self.device_model == 'S3':
                 self.camera_list = ['center', 'right', 'left']
-
-            # start video thread at this point 
-            # - to capture the initial white LED and blue LED during BLE connection
-            # - fixed red LED for 3s => critical error
-            # video thread @ >10fps for >4 seconds
-            # fixed, 0.5Hz, 1Hz, 2Hz
-
+            
             now = datetime.now()
             self.head_details['date_time'] = now.strftime(r"%Y-%m-%d %H:%M:%S")
             QTimer.singleShot(1, self.get_device_mac)
+            # QTimer.singleShot(1, self.charging_test)
         except:
             pass
 

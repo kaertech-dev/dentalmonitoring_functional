@@ -1,4 +1,5 @@
-{   "indicator_led": {"red": "44,0,0",
+{   "version": "1.0.0",
+    "indicator_led": {"red": "44,0,0",
                         "green": "0,42,0",
                         "blue": "0,0,58",
                         "orange": "35,0,0"
@@ -7,10 +8,17 @@
                         "snr": {"maximum": 15}
                     },
     "led_luminance": {"minimum": 60},
-    "lit_frame_test": {"reso": {"minimum": -1},
+    "lit_frame_80mm": {"reso": {"minimum": -1},
                         "contrast": {"minimum": 0.5},
-                        "r2g": {"maximum": 1.4, "minimum": 0.5},
-                        "b2g": {"maximum": 1.4, "minimum": 0.5},
+                        "r2g": {"maximum": 2.5, "minimum": 0.5},
+                        "b2g": {"maximum": 2.5, "minimum": 0.5},
+                        "snr": {"minimum": -5},
+                        "dotgrid": {"minimum": -1}
+                    },
+    "lit_frame_110mm": {"reso": {"minimum": -1},
+                        "contrast": {"minimum": 0.5},
+                        "r2g": {"maximum": 2.5, "minimum": 0.5},
+                        "b2g": {"maximum": 2.5, "minimum": 0.5},
                         "snr": {"minimum": -5},
                         "dotgrid": {"minimum": -1}
                     }
