@@ -1,5 +1,4 @@
 import os
-import csv
 import pymysql
 from pymysql.cursors import DictCursor
 from datetime import datetime, time, timedelta
@@ -7,24 +6,23 @@ from datetime import datetime, time, timedelta
 DB_USER = os.getenv('DB_USER', 'labeling')
 DB_PASSWORD = os.getenv('DB_PASSWORD', 'labeling')
 
-DB_CONFIG = {
-    'user': DB_USER,
-    'password': DB_PASSWORD,
-    'autocommit': False,
-    'use_unicode': True,
-    'charset': 'utf8mb4'
-}
-
 class DatabaseConn:
-    def __init__(self, db_host: str, schema: str, model: str, station: str):
-        self.config = DB_CONFIG
-        self.config['host'] = db_host
-        self.schema = schema
-        self.model = model
-        self.station = station
-        self.table_name = f"`{model}_{station}`"
+    def __init__(self, input_config: dict):
+        self.config = {'user': DB_USER,
+                        'password': DB_PASSWORD,
+                        'autocommit': False,
+                        'use_unicode': True,
+                        'charset': 'utf8mb4'
+                        }
+        self.config['host'] = input_config['host']
+
+        self.schema = input_config['customer']
+        self.model = input_config['model']
+        self.station = input_config['station']
+        self.main_table = f"`{self.model}_main`"
+        self.table_name = f"`{self.model}_{self.station}`"
+
         self.previous_stations = []
-        self.csv_headers = []
 
     def connect(self, schema: str):
         """Create database connection"""
@@ -43,6 +41,7 @@ class DatabaseConn:
                     today = datetime.now()
                     am = time(7,0,0)
                     pm = time(19,0,0)
+                    # Set shift start/end
                     if today.time() >= am and today.time() < pm:
                         shift = [datetime.combine(today.date(), am), datetime.combine(today.date(), pm)]
                     else:
@@ -91,20 +90,14 @@ class DatabaseConn:
                 with conn.cursor(DictCursor) as cursor:
                     query = "SELECT `serial_num`, `bt_mac` FROM " + f"{self.model}_progtest" + " WHERE `serial_num` = %s"
                     cursor.execute(query, (serial_num,))
-                    rec = cursor.fetchall()
+                    rec = cursor.fetchone()
 
                     if len(rec) == 0:
-                        return 0, ''
+                        return {'error': 'No MAC Address in Database'}
                     
-                    return 1, rec[0]['bt_mac']
-        except pymysql.Error as e:
-            return -1, f'Error: {e}'
-
-        except AttributeError as e:
-            return -1, e
-
-        except TypeError as e:
-            return False, 'Database connection error'
+                    return {'bt_mac': rec['bt_mac']}
+        except Exception as e:
+            return {'error': str(e)}
         
     def prev_station_ok(self, serial_num) -> tuple[bool, str]:
         try:
@@ -184,6 +177,48 @@ class DatabaseConn:
         except TypeError as e:
             return False, 'Database connection error'
 
+    def get_db_status(self, serial_num):
+        try:
+            with self.connect(self.schema) as dbconn:
+                with dbconn.cursor(DictCursor) as cursor:
+                    main_query = " SELECT * FROM " + self.main_table + " WHERE `serial_num` = %s "
+                    cursor.execute(main_query, (serial_num,))
+                    main_status = cursor.fetchone()
+
+                    if not main_status:
+                        return {'error': "Serial Number not in Database"}
+
+                    ponum = main_status['po_num']
+
+                    curr_test_rep = -1
+                    failed_stations = []
+                    for column in main_status.keys():
+                        if column == 'serial_num' or column == 'po_num':
+                            continue
+                        elif column == self.station:
+                            retest_query = " SELECT `test_rep` FROM " + self.table_name + " WHERE `serial_num` LIKE %s ORDER BY `test_rep` DESC"
+                            cursor.execute(retest_query, (f'{serial_num}%',))
+                            curr_test_rep = len(cursor.fetchall()) + 1
+                            break
+                        else:
+                            table_name = f"`{self.model}_{column}`"
+                            sub_query = " SELECT `serial_num`, `status` FROM " + table_name + " WHERE `serial_num` = %s "
+                            cursor.execute(sub_query, (serial_num,))
+                            sub_status = cursor.fetchone()
+                            if sub_status['status'] == 0:
+                                failed_stations.append(column)
+
+                    if len(failed_stations) > 0:
+                        return {'error': "Unit did not pass " + ', '.join(failed_stations)}
+
+                    if curr_test_rep > 3:
+                        return {'error': "No more retest allowed until FA"}
+                    else:
+                        return {'po_num': ponum, 'test_rep': curr_test_rep}
+
+        except Exception as e:
+            return {'error': str(e)}
+
     def db_insert(self, head_details: dict, data: dict, tail_details: dict):
         all_values = head_details | data | tail_details
         serial_num = head_details.get('serial_num')
@@ -220,27 +255,6 @@ class DatabaseConn:
                         return False, 'Error writing to database'
         except Exception as e:
             return False, str(e)
-
-    def log_to_csv(self, head_details: dict, data: dict, tail_details: dict):
-        if not self.csv_headers:
-            self.csv_headers = ['serial_num', 'po_num', 'operator_en', 'shift', 'date_time']
-            tailers = ['prod_sn', 'batch_code', 'duration', 'test_rep', 'status', 'fail_reason']
-            self.csv_headers.extend(data.keys())
-            self.csv_headers.extend(tailers)
-        
-        if not os.path.exists('results.csv'):
-            with open('results.csv', 'w', newline='') as file:
-                writer = csv.DictWriter(file, fieldnames=self.csv_headers, extrasaction='ignore')
-                writer.writeheader()
-
-        with open('results.csv', 'a', newline='') as file:
-            writer = csv.DictWriter(file, fieldnames=self.csv_headers, extrasaction='ignore')
-            if not tail_details.get('prod_sn'):
-                tail_details['prod_sn'] = ''
-            if not tail_details.get('batch_code'):
-                tail_details['batch_code'] = ''
-            final = head_details | data | tail_details
-            writer.writerow(final)
 
 # if __name__=='__main__':
 #     dbconn = DatabaseConn()

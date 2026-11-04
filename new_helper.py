@@ -22,6 +22,22 @@ def get_path(raw_path):
         ret = os.path.join('.', raw_path)
     return ret
 
+class SettingsBox(QDialog):
+    def __init__(self):
+        super().__init__()
+        uic.loadUi(get_path('layout/settings_box.ui'), self)
+        self.dev_button.clicked.connect(self.set_dev)
+        self.prod_button.clicked.connect(self.set_prod)
+        self.mode = ''
+
+    def set_dev(self):
+        self.mode = 'DEVELOPMENT'
+        self.accept()
+
+    def set_prod(self):
+        self.mode = 'PRODUCTION'
+        self.accept()
+
 class BtWifiWorker(QObject):
     finished = pyqtSignal(bool)
     failed = pyqtSignal(str)
@@ -352,6 +368,10 @@ class Streamer(QThread):
 class StackedUI(QDialog):
     fail_reason = pyqtSignal(str)
     found_ip = pyqtSignal(str)
+    dft_done = pyqtSignal()
+    lft80_done = pyqtSignal()
+    lft110_done = pyqtSignal()
+    stream_done = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)

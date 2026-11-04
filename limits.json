@@ -1,8 +1,8 @@
 {   "version": "1.0.0",
-    "indicator_led": {"red": "44,0,0",
-                        "green": "0,42,0",
-                        "blue": "0,0,58",
-                        "orange": "35,0,0"
+    "indicator_led": {"red": "43,0,0",
+                        "green": "0,40,0",
+                        "blue": "0,0,50",
+                        "orange": "30,30,0"
                     },
     "dark_frame_test": {"lumi": {"maximum": 50},
                         "snr": {"maximum": 15}

@@ -520,7 +520,7 @@ class WifiThread(QObject):
         # self.restore_t.setInterval(check_interval)
         # self.restore_t.timeout.connect(self.check_restore)
 
-        self.max_timeout = (1000/check_interval) * 30
+        self.max_timeout = (1000/check_interval) * 60
         self.counter = 0
         # self.restored = False
 
@@ -573,8 +573,8 @@ class WifiThread(QObject):
         self.iface.remove_network_profile(self.profile)
 
         self.counter = 0
-        self.restore_t.start()
-        self.iface.connect(self.default_profile)
+        # self.restore_t.start()
+        # self.iface.connect(self.default_profile)
 
     def check_connected(self):
         if self.iface.status() == const.IFACE_CONNECTED:
