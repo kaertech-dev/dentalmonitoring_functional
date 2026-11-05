@@ -9,6 +9,6 @@
 | Number | Changelog |
 | :------: | :----------- |
 | 1.0.0 | first commit |
-| 1.1.0 | added retries for HTTP requests |
-| 1.2.0 | added auto-fail timeout |
-| 1.3.0 | created separate thread for Bluetooth & WiFi processes; removed DAQ |
+| 1.1.0 | retries for HTTP requests; auto-fail timeout |
+| 1.2.0 | removed DAQ; increased HTTP retries |
+| 1.3.0 | separate BT-Wifi thread; improved database queries |

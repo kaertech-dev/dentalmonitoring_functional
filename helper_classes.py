@@ -516,37 +516,37 @@ class WifiThread(QObject):
         self.conn_t = QTimer()
         self.conn_t.setInterval(check_interval)
         self.conn_t.timeout.connect(self.check_connected)
-        # self.restore_t = QTimer()
-        # self.restore_t.setInterval(check_interval)
-        # self.restore_t.timeout.connect(self.check_restore)
+        self.restore_t = QTimer()
+        self.restore_t.setInterval(check_interval)
+        self.restore_t.timeout.connect(self.check_restore)
 
         self.max_timeout = (1000/check_interval) * 60
         self.counter = 0
-        # self.restored = False
+        self.restored = False
 
-    # def restore_net(self):
-    #     self.counter = 0
-    #     self.restore_t.start()
-    #     self.iface.connect(self.default_profile)
+    def restore_net(self):
+        self.counter = 0
+        self.restore_t.start()
+        self.iface.connect(self.default_profile)
 
-    # def check_restore(self):
-    #     if self.iface.status() == const.IFACE_CONNECTED:
-    #         self.restore_t.stop()
-    #         print('Net restored:', self.default_profile.ssid)
-    #         self.net_restored.emit(True)
-    #         self.restored = True
-    #         return
+    def check_restore(self):
+        if self.iface.status() == const.IFACE_CONNECTED:
+            self.restore_t.stop()
+            print('Net restored:', self.default_profile.ssid)
+            self.net_restored.emit(True)
+            self.restored = True
+            return
         
-    #     if self.iface.status() == const.IFACE_DISCONNECTED:
-    #         self.iface.connect(self.profile)
+        if self.iface.status() == const.IFACE_DISCONNECTED:
+            self.iface.connect(self.profile)
 
-    #     self.counter += 1
-    #     # print('conn', self.counter)
-    #     if self.counter == self.max_timeout:
-    #         self.restore_t.stop()
-    #         print('Net not restored')
-    #         self.net_restored.emit(False)
-    #         return
+        self.counter += 1
+        # print('conn', self.counter)
+        if self.counter == self.max_timeout:
+            self.restore_t.stop()
+            print('Net not restored')
+            self.net_restored.emit(False)
+            return
 
     def run(self, ip_addr):
         print('--- wifi thread running')
@@ -573,8 +573,8 @@ class WifiThread(QObject):
         self.iface.remove_network_profile(self.profile)
 
         self.counter = 0
-        # self.restore_t.start()
-        # self.iface.connect(self.default_profile)
+        self.restore_t.start()
+        self.iface.connect(self.default_profile)
 
     def check_connected(self):
         if self.iface.status() == const.IFACE_CONNECTED:
@@ -901,7 +901,7 @@ class StackedUI(QDialog):
         for key, value in raw_values.items():
             param_name = key.split('_')[-1]
             limits = params_list.get(param_name)
-            print(key, value, limits)
+            # print(key, value, limits)
             if not limits:
                 continue
 

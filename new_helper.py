@@ -368,13 +368,14 @@ class Streamer(QThread):
 class StackedUI(QDialog):
     fail_reason = pyqtSignal(str)
     found_ip = pyqtSignal(str)
+    dev_status = pyqtSignal(dict)
     dft_done = pyqtSignal()
     lft80_done = pyqtSignal()
     lft110_done = pyqtSignal()
     stream_done = pyqtSignal()
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def __init__(self):
+        super().__init__()
         uic.loadUi(get_path('layout/widget_stack.ui'), self)
 
         self.dut.setPixmap(QPixmap(get_path(r"static/camera3_vid-0")))
@@ -504,12 +505,20 @@ class StackedUI(QDialog):
             self.progress_msg.setText('STATUS READ FAILED AFTER 3 TIMES')
             return
 
+        dict_to_send = {}
         tab_model = QStandardItemModel()
         self.tableView.setModel(tab_model)
         for key, value in device_status.items():
             ll = QStandardItem(key)
             rr = QStandardItem(str(value))
             tab_model.appendRow([ll, rr])
+
+            if key == 'battery_voltage_mv':
+                dict_to_send['batt_mv'] = str(value)
+            elif key == 'firmware_version':
+                dict_to_send['fw_version'] = str(value)
+        
+        self.dev_status.emit(dict_to_send)
         self.tableView.setColumnWidth(0, 180)
         self.tableView.setColumnWidth(1, 253)
 

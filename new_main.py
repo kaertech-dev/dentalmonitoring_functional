@@ -11,7 +11,7 @@ import configparser
 from datetime import datetime
 
 from PyQt6 import uic
-from PyQt6.QtWidgets import QApplication, QMainWindow, QDialog, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMainWindow, QDialog, QMessageBox, QInputDialog, QLineEdit
 from PyQt6.QtGui import QImage, QPixmap, QShortcut, QKeySequence, QStandardItemModel, QStandardItem
 from PyQt6.QtCore import QTimer, Qt
 
@@ -22,8 +22,8 @@ Q_OK = QMessageBox.StandardButton.Ok
 Q_YES = QMessageBox.StandardButton.Yes
 Q_NO = QMessageBox.StandardButton.No
 
-class RowEntry:
-    def __init__(self, serial_num, po_num):
+class TestResults:
+    def __init__(self, serial_num: str, po_num: str, test_rep: int):
         self.serial_num = serial_num
         self.po_num = po_num
         self.headers = ['serial_num', 'po_num', 'operator_en', 'shift', 'date_time', 'tester_code',
@@ -36,7 +36,8 @@ class RowEntry:
                         'duration', 'test_rep', 'status', 'fail_reason'
                         ]
 
-        self.temp_parameters = {'center': {'dft': False, 'lft_80': False, 'lft_110': False}}
+        self.temp_fail_reasons = []
+        self.temp_cam_params = {'center': {'dft': False, 'lft_80': False, 'lft_110': False, 'stream': False}}
 
         self.values = {}
         for col in self.headers:
@@ -46,6 +47,7 @@ class RowEntry:
         self.values['po_num'] = po_num
         now = datetime.now()
         self.values['date_time'] = now.strftime(r"%Y-%m-%d %H:%M:%S")
+        self.values['test_rep'] = test_rep
 
     def __getitem__(self, key):
         return self.values[key]
@@ -53,9 +55,22 @@ class RowEntry:
     def __setitem__(self, key, value):
         self.values[key] = value
 
-    def op_login(self, operator_en, shift):
+    def exit_fail(self, fail_reason: str):
+        self.temp_fail_reasons.append(fail_reason)
+
+    def process_values(self, operator_en: str, shift: str, tester_code: str, test_duration: float) -> dict:
         self.values['operator_en'] = operator_en
         self.values['shift'] = shift
+        self.values['tester_code'] = tester_code
+        self.values['duration'] = f"{test_duration:.2f}"
+
+        if len(self.temp_fail_reasons) > 0:
+            self.values['status'] = 0
+            self.values['fail_reason'] = ', '.join(self.temp_fail_reasons)
+        else:
+            self.values['status'] = 1
+
+        return self.values
 
     def get_headers(self):
         return self.headers
@@ -216,6 +231,7 @@ class MainWindow(QMainWindow):
 
     def clear_table(self):
         self.start_test_button.setEnabled(False)
+        self.abort_button.setEnabled(False)
 
         # self.current_serial = ''
         # self.mac_address = ''
@@ -227,12 +243,12 @@ class MainWindow(QMainWindow):
 
         self.tableModel.clear()
         self.tableModel.setHorizontalHeaderLabels(['Test', 'Low', 'Value', 'High', 'Status', 'Fail Reason'])
-        self.tableView.setColumnWidth(0, 140)
-        self.tableView.setColumnWidth(1, 80)
-        self.tableView.setColumnWidth(2, 80)
-        self.tableView.setColumnWidth(3, 80)
-        self.tableView.setColumnWidth(4, 60)
-        self.tableView.setColumnWidth(5, 303)
+        self.tableView.setColumnWidth(0, 120)
+        self.tableView.setColumnWidth(1, 120)
+        self.tableView.setColumnWidth(2, 120)
+        self.tableView.setColumnWidth(3, 120)
+        self.tableView.setColumnWidth(4, 70)
+        self.tableView.setColumnWidth(5, 170)
 
     def add_row(self, param_name: str, value: str, status: str, low: str = '', high: str = '', fail_reason: str = ''):
         test_item = QStandardItem(param_name)
@@ -242,6 +258,11 @@ class MainWindow(QMainWindow):
         status_item = QStandardItem(status)
         fail_item = QStandardItem(fail_reason)
         self.tableModel.appendRow([test_item, low_item, value_item, high_item, status_item, fail_item])
+
+        if not fail_reason:
+            self.final_results[param_name] = value
+        else:
+            self.final_results.exit_fail(fail_reason)
 
     def validate_serial(self):
         try:
@@ -258,22 +279,17 @@ class MainWindow(QMainWindow):
                 self.serialno_display.setFocus()
                 return False
 
-            result = self.dbconn.get_db_status(self.current_serial)
-            if 'error' in result:
-                QMessageBox.warning(self, 'Error', result['error'], buttons=QMessageBox.StandardButton.Ok)
+            db_status = self.dbconn.get_db_status(self.current_serial)
+            if 'error' in db_status:
+                QMessageBox.warning(self, 'Error', db_status['error'], buttons=QMessageBox.StandardButton.Ok)
                 if self.mode_label.text() == 'PRODUCTION':
                     return False
 
-            po_num = result.get('po_num', '')
+            po_num = db_status.get('po_num', '')
             self.ponum_display.setText(po_num)
-            self.final_results = RowEntry(self.current_serial, po_num)
-            
-            # self.tail_details['test_rep'] = result.get('test_rep', 1)
-            # if self.mode_label.text() == 'DEVELOPMENT':
-            #     self.tail_details['test_rep'] = 1
-            # else:
-            #     self.tail_details['test_rep'] = result.get('test_rep', 1)
+            test_rep = db_status.get('test_rep', 1)
 
+            self.final_results = TestResults(self.current_serial, po_num, test_rep)
             self.start_test_button.setEnabled(True)
 
         except Exception as e:
@@ -285,35 +301,21 @@ class MainWindow(QMainWindow):
                 res = QMessageBox.critical(self, 'Error', 'Power Supply not detected', Q_OK)
                 # return
 
-            # self.stacker.reset_holders()
             self.enable_PSupply(False)
-            # self.head_details['serial_num'] = self.current_serial
-            # self.head_details['po_num'] = self.ponum_display.text()
-            # if len(self.config['tester_code']) > 0:
-            #     self.head_details['tester_code'] = self.config['tester_code']
-            # self.head_details.update(self.login_details)
-            self.enable_buttons(False)
+            # self.enable_buttons(False)
 
-            # try:
-            #     self.stacker.dft_done.disconnect()
-            #     self.stacker.lft80_done.disconnect()
-            #     self.stacker.lft110_done.disconnect()
-            #     self.stacker.stream_done.disconnect()
-            # except TypeError:
-            #     pass
-            self.stacker = StackedUI(self)
+            # oprtr = self.oprtr_en_input.text().strip().upper()
+            # shift = self.shift_input.currentText().strip().upper()
+            # tester_code = self.config['tester_code']
+            # self.final_results.op_login(oprtr, shift, tester_code)
 
-            self.stacker.done_measure.connect(self.ft_measure_end)
-            self.stacker.done_stream.connect(self.close_stream)
+            self.stacker = StackedUI()
+
+            # self.stacker.done_measure.connect(self.ft_measure_end)
+            # self.stacker.done_stream.connect(self.close_stream)
             self.messages.setText("Test in progress")
             self.start_test_time = time.time()
 
-            self.camera_list = ['center']
-            if self.device_model == 'S3':
-                self.camera_list = ['center', 'right', 'left']
-            
-            # now = datetime.now()
-            # self.head_details['date_time'] = now.strftime(r"%Y-%m-%d %H:%M:%S")
             QTimer.singleShot(1, self.get_device_mac)
         except Exception as e:
             QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
@@ -324,16 +326,29 @@ class MainWindow(QMainWindow):
             if 'error' in result:
                 QMessageBox.critical(self, "Error", result['error'])
                 if self.mode_label.text() == 'PRODUCTION':
-                    self.fail_reasons.append('NO_BLE')
+                    self.add_row('bt_mac', '', 'FAIL', fail_reason='NO_BLE')
+                    # self.final_results.exit_fail('NO_BLE')
                     return
 
             self.mac_address = result.get('bt_mac', 'CC:C8:37:2F:8B:29')
+            # self.final_results['bt_mac'] = self.mac_address
             self.add_row('bt_mac', self.mac_address, 'PASS')
+
+            self.stacker.found_ip.connect(self.insert_ip)
+            self.stacker.dev_status.connect(self.insert_status)
+            self.stacker.show()
+            self.stacker.dut_ap_connect(self.mac_address)
 
         except Exception as e:
             QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
 
     # ========== Step 0. BLE & WiFi Connection ========== #
+    def insert_ip(self, ipaddress):
+        self.add_row('ip_address', ipaddress, 'PASS')
+
+    def insert_status(self, received: dict):
+        for key, value in received.items():
+            self.add_row(key, value, 'PASS')
 
     def write_csv(self):
         now = datetime.now()
