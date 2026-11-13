@@ -916,9 +916,9 @@ class StackedUI(QDialog):
                 print('sobel', sobel) # higher value = sharper
             except:
                 variance = None
-                sobel = None
+                # sobel = None
 
-            cv2.imwrite(f'photos/{serial_num}_lf{distance}_{variance}/{sobel}.jpg', raw_image)
+            cv2.imwrite(f'photos/{serial_num}_lf{distance}.jpg', raw_image)
 
             try:
                 # dot grid detection
@@ -944,17 +944,8 @@ class StackedUI(QDialog):
                     snr_db = None
             except:
                 snr_db = None
-            
-            # if distance == 80:
-            #     alt_results = {'lf80_reso': -1, 'lf80_contrast': m_cont, 
-            #                         'lf80_r2g': r2g_ratio, 'lf80_b2g': b2g_ratio, 
-            #                         'lf80_snr': round(snr_db.item(), 2), 'lf80_dotgrid': circle_count}
-            # elif distance == 110:
-            #     alt_results = {'lf110_reso': -1, 'lf110_contrast': m_cont, 
-            #                         'lf110_r2g': r2g_ratio, 'lf110_b2g': b2g_ratio, 
-            #                         'lf110_snr': round(snr_db.item(), 2), 'lf110_dotgrid': circle_count}
 
-            temp = {'reso': -1, 'contrast': m_cont, 
+            temp = {'reso': variance, 'contrast': m_cont, 
                     'r2g': r2g_ratio, 'b2g': b2g_ratio, 
                     'snr': snr_db, 'dotgrid': circle_count}
 
@@ -1009,7 +1000,6 @@ class StackedUI(QDialog):
             self.vthread.change_pixmap_signal.connect(self.update_image)
             self.vthread.stream_error.connect(self.fail_reason.emit)
             self.vthread.start()
-            # self.stream_timeout.start()
             QTimer.singleShot(self.stream_dur * 1000, self.stream_stop)
         except:
             self.fail_reason.emit('STREAM_FAIL')
@@ -1022,7 +1012,6 @@ class StackedUI(QDialog):
         except:
             pass
         self.vthread.stop()
-        # self.vthread.deleteLater()
 
     def onTop(self):
         if not self.isVisible():

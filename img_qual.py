@@ -67,17 +67,25 @@ def other_main():
     cap.release()
     cv2.destroyAllWindows()
 
+def click_event(event, x, y, flags, params):
+    if event == cv2.EVENT_LBUTTONDOWN:
+        print(x/0.4, y/0.4)
+
 def mtf_test():
     import matplotlib.pyplot as plt
     from pylinac.core.mtf import EdgeSpreadFunctionMTF
 
-    img = cv2.imread(r"usaf-test.jpg")[373:858, 715:1251]
+    # img = cv2.imread(r"usaf-test.jpg")[373:858, 715:1251]
+    img = cv2.imread(r"C:\Users\Bryan Bascos\Desktop\photos\K20262940127_lf110.jpg")
+    cv2.imshow('dums', cv2.resize(img, None, fx=0.4, fy=0.4, interpolation=cv2.INTER_CUBIC))
+    cv2.setMouseCallback('dums', click_event)
+    cv2.waitKey(0)
     grayscale = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    edge_1 = grayscale[195:227, 267]
-    edge_2 = grayscale[195:227, 274]
-    edge_3 = grayscale[195:227, 289]
-    edge_4 = grayscale[195:227, 297]
+    edge_1 = grayscale[1750:1850, 809]
+    edge_2 = grayscale[1750:1850, 838]
+    edge_3 = grayscale[1750:1850, 865]
+    edge_4 = grayscale[1750:1850, 900]
 
     mtf_calc = EdgeSpreadFunctionMTF(esf=[edge_1, edge_2, edge_3, edge_4], padding_mode='auto')
     values = mtf_calc.plot()
@@ -117,6 +125,34 @@ def get_final_status(test_name: str, raw_values: dict):
 
     print('final:', status)
     return status
+
+def dotcenter():
+    image = cv2.imread(r"C:\Users\Bryan Bascos\Desktop\DM Lumyo images\K20462940119_lf110.jpg")
+    grayscale = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # ret, centers = cv2.findCirclesGrid(grayscale, (50,50), cv2.CALIB_CB_SYMMETRIC_GRID)
+    # if ret:
+    #     print('circles', len(centers))
+    #     cv2.drawChessboardCorners(grayscale, (50,50), centers, ret)
+    #     cv2.imshow("window", grayscale)
+    #     cv2.waitKey(0)
+    #     cv2.destroyAllWindows()
+    # else:
+    #     print('no circles')
+
+    ret, thresh1 = cv2.threshold(grayscale, 70, 255, cv2.THRESH_TOZERO)
+    contours, _ = cv2.findContours(thresh1, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    circle_count = 0
+    for i, ctr in enumerate(contours):
+        (x,y), radius = cv2.minEnclosingCircle(ctr)
+        if radius <= 13 and radius >= 5:
+            circle_count += 1
+            # print(x,y,int(radius))
+            cv2.circle(image, (int(x),int(y)), int(radius), (0,0,255), 1)
+
+    print('circles', circle_count)
+    cv2.imshow('tt', cv2.resize(image, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA))
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
 def http_api_test():
     import requests
@@ -172,7 +208,8 @@ if __name__=="__main__":
     # other_main()
     # http_api_test()
     # mtf_test()
-    results = {'lf80_reso': -1, 'lf80_contrast': 0.897, 
-                'lf80_r2g': 1, 'lf80_b2g': 1, 
-                'lf80_snr': 2.98765, 'lf80_dotgrid': -1}
-    get_final_status('lit_frame_80mm', results)
+    # results = {'lf80_reso': -1, 'lf80_contrast': 0.897, 
+    #             'lf80_r2g': 1, 'lf80_b2g': 1, 
+    #             'lf80_snr': 2.98765, 'lf80_dotgrid': -1}
+    # get_final_status('lit_frame_80mm', results)
+    dotcenter()
