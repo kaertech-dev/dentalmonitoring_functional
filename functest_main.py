@@ -69,27 +69,24 @@ class MainWindow(QMainWindow):
         self.tableView.setModel(self.tableModel)
         self.init_test_variables()
 
-        # self.relay_off_cmd = ['daq/TSD_DAQ.exe', '--port', 'D',  '--execute', '0']
-        # res = subprocess.run(self.relay_off_cmd)
-        # self.relay_on_cmd = ['daq/TSD_DAQ.exe', '--port', 'D',  '--execute', '1']
-
         self.auto_abort_timer = QTimer()
         self.auto_abort_timer.setInterval(1000 * 45)
-        self.auto_abort_timer.timeout.connect(lambda: self.add_fail_reason('Test timeout'))
+        self.auto_abort_timer.timeout.connect(lambda: self.add_fail_reason('TEST TIMEOUT'))
 
         self.golden_tested_flag = None
         self.golden_sn = None
         
         if self.device_model == 'S3':
-            self.bar_step = 100 / 20
+            self.bar_step = 100 / 53
         else:
-            self.bar_step = 100 / 12
+            self.bar_step = 100 / 25
         self.start_test_button.setEnabled(False)
 
         self.http_manager = HTTPRequest(self)
         self.stacker = StackedUI(10, self.config['cam_source'], self.config['cam_params'], 
-                                 self.test_limits, self.config['dut_ssid'], self.config['dut_password'])
-        self.stacker.fail_reason.connect(self.add_fail_reason)
+                                 self.test_limits, self.config['dut_ssid'], self.config['dut_password'],
+                                 self.config['use_lan'])
+        # self.stacker.fail_reason.connect(self.add_fail_reason)
         self.stacker.alt_signal.connect(self.alt_meas_end)
         self.stacker.led_okay.connect(self.led_catcher)
 
@@ -97,84 +94,52 @@ class MainWindow(QMainWindow):
         self.hw_timer.timeout.connect(self.update_current)
         self.connect_port()
 
-        # timer = QTimer(self)
-        # timer.timeout.connect(self.update_time)
-        # timer.start(1000)
-        # self.update_time()
+        self.wifi_timer = QTimer(self)
+        self.wifi_timer.timeout.connect(self.stacker.wifi_widget.maintain_conn)
+        self.wifi_timer.setInterval(5000)
 
         # Connect button click signal to slot
-        self.login_button.clicked.connect(self.login)
         self.start_test_button.clicked.connect(self.start_test)
         self.serialno_display.returnPressed.connect(self.validate_serial)
+        self.serialno_display.textChanged.connect(self.reinit)
         self.settings_button.clicked.connect(self.open_settings)
         self.abort_button.clicked.connect(self.abort_signal)
 
-        # Keyboard shortcuts
-        self.initialize_shortcuts()
+    def reinit(self, new_text):
+        if new_text == '':
+            self.init_test_variables()
+            self.start_test_button.setEnabled(False)
+            self.abort_button.setEnabled(False)
 
-    # def update_time(self):
-    #     now = datetime.now()
-    #     self.date_display.setText(now.date().strftime(r'%m/%d/%Y'))
-    #     self.time_display.setText(now.time().strftime(r'%I:%M:%S %p'))
-    
-    def initialize_shortcuts(self):
-        SC_start_test = QShortcut(QKeySequence("F12"), self)
-        SC_start_test.activated.connect(self.start_test)
-
-        SC_open_settings = QShortcut(QKeySequence("F10"), self)
-        SC_open_settings.activated.connect(self.open_settings)
-
-        SC_abort_test = QShortcut(QKeySequence("F8"), self)
-        SC_abort_test.activated.connect(self.abort_signal)
-
-        SC_exit_app = QShortcut(QKeySequence("End"), self)
-        SC_exit_app.activated.connect(self.close)
-    
-    def login(self):
-        if self.login_button.text() == 'LOGIN':
-            user = self.oprtr_en_input.text()
-            shift = self.shift_input.currentText()
-
-            if user and shift:
-                self.login_details['operator_en'] = user.strip().upper()
-                self.login_details['shift'] = shift.strip().upper()
-                self.oprtr_en_input.setEnabled(False)
-                self.shift_input.setEnabled(False)
-                self.login_button.setText('LOGOUT')
-            else:
-                QMessageBox.information(self, 'Info', 'Please enter all details', buttons=QMessageBox.StandardButton.Ok)
-        else:
-            self.login_details['operator_en'] = 'DEV_MODE'
-            self.login_details['shift'] = 'A'
-            self.oprtr_en_input.setEnabled(True)
-            self.shift_input.setEnabled(True)
-            self.login_button.setText('LOGIN')
+    def keyPressEvent(self, a0):
+        if a0.isInputEvent() and a0.text() != '':
+            if not self.serialno_display.hasFocus():
+                self.serialno_display.keyPressEvent(a0)
+        return super().keyPressEvent(a0)
     
     def open_settings(self):
-        mode_box = SettingsBox()
+        mode_box = SettingsBox(self.oprtr_display.text(), self.shift_display.text())
         result = mode_box.exec()
 
         if result:
-            if mode_box.mode == 'DEVELOPMENT':
+            self.oprtr_display.setText(mode_box.output['operator_en'])
+            self.shift_display.setText(mode_box.output['shift'])
+            if mode_box.output['mode'] == 'DEVELOPMENT':
                 self.mode_label.setText('DEVELOPMENT')
                 self.mode_label.setStyleSheet("background-color: rgb(170, 255, 255);")
             else:
                 self.mode_label.setText('PRODUCTION')
                 self.mode_label.setStyleSheet("background-color: rgb(255, 255, 0);")
             
-            self.load_config()
+            # self.load_config()
             self.init_test_variables()
 
     def connect_port(self):
         try:
             self.hw_serial = serial.Serial(port = self.config['hw_port'], baudrate = int(self.config['baud_rate']))
-            # self.hw_serial.write(b'OUT1\r\n')
-            # self.hw_serial.write(b'OUT0\r\n')
-            # self.hw_serial.flush()
             self.hw_serial.reset_input_buffer()
             self.hw_serial.reset_output_buffer()
             self.messages.setText(f'POWER SUPPLY AT {self.config["hw_port"]}')
-            # self.hw_timer.start(1000)
             self.enable_supply(False)
         except:
             self.hw_serial = None
@@ -233,6 +198,7 @@ class MainWindow(QMainWindow):
 
     def abort_signal(self):
         self.auto_abort_timer.stop()
+        self.wifi_timer.stop()
         self.stacker.abort_test()
         self.http_manager.abortAll()
 
@@ -248,7 +214,6 @@ class MainWindow(QMainWindow):
     def enable_buttons(self, state: bool):
         if state == False:
             self.start_test_button.setEnabled(state)
-        self.login_button.setEnabled(state)
         self.settings_button.setEnabled(state)
 
     def init_test_variables(self):
@@ -264,7 +229,7 @@ class MainWindow(QMainWindow):
 
         self.led_results = {}
         self.cam_results = {}
-        self.stream_results = {}
+        # self.stream_results = {}
         self.bringup_results = {}
         self.all_results = {}
         self.fail_reasons = []
@@ -279,21 +244,23 @@ class MainWindow(QMainWindow):
         # self.enable_buttons(True)
 
         self.tableModel.clear()
-        self.tableModel.setHorizontalHeaderLabels(['Test', 'Value', 'Status', 'Fail Reason'])
-        self.tableView.setColumnWidth(0, 150)
-        # self.tableView.setColumnWidth(1, 100) #
+        self.tableModel.setHorizontalHeaderLabels(['Test', 'Low', 'Value', 'High', 'Status', 'Fail Reason'])
+        self.tableView.setColumnWidth(0, 140)
         self.tableView.setColumnWidth(1, 120)
-        # self.tableView.setColumnWidth(1, 100) #
-        self.tableView.setColumnWidth(2, 70)
-        self.tableView.setColumnWidth(3, 405)
+        self.tableView.setColumnWidth(2, 120)
+        self.tableView.setColumnWidth(3, 120)
+        self.tableView.setColumnWidth(4, 73)
+        self.tableView.setColumnWidth(5, 170)
 
     # Add entry to table and final values
-    def append_result(self, param_name: str, value, status: str, fail_reason = ''):
-        test_item = QStandardItem(param_name)
+    def append_result(self, param_name: str, value, status: str, fail_reason = '', low: str = '', high: str = ''):
+        test_item = QStandardItem(param_name.upper())
+        low_item = QStandardItem(low)
         value_item = QStandardItem(str(value))
+        high_item = QStandardItem(high)
         status_item = QStandardItem(status)
         fail_item = QStandardItem(fail_reason)
-        self.tableModel.appendRow([test_item, value_item, status_item, fail_item])
+        self.tableModel.appendRow([test_item, low_item, value_item, high_item, status_item, fail_item])
 
         if status == 'PASS':
             self.all_results[param_name] = 1
@@ -305,41 +272,46 @@ class MainWindow(QMainWindow):
         self.test_progress.setValue(round(self.progress_percent))
 
     # Add entry to table only (not in final values)
-    def append_temp(self, param_name: str, value, status: str, fail_reason = ''):
-        test_item = QStandardItem('_' + param_name)
+    def append_temp(self, param_name: str, value, status: str, fail_reason = '', low: str = '', high: str = ''):
+        test_item = QStandardItem(param_name)
+        low_item = QStandardItem(low)
         value_item = QStandardItem(str(value))
+        high_item = QStandardItem(high)
         status_item = QStandardItem(status)
         fail_item = QStandardItem(fail_reason)
-        self.tableModel.appendRow([test_item, value_item, status_item, fail_item])
+        self.tableModel.appendRow([test_item, low_item, value_item, high_item, status_item, fail_item])
 
     def add_fail_reason(self, fr_text: str):
         self.fail_reasons.append(fr_text)
         QTimer.singleShot(10, self.auto_fail)
         self.activateWindow()
-        resp = QMessageBox.critical(self, 'Device FAIL', f"Reason code: {fr_text}", QMessageBox.StandardButton.Ok)
+        resp = QMessageBox.critical(self, 'Device FAIL', f"Reason code: {fr_text}", Q_OK)
 
     def test_end(self):
         self.messages.setText('Enter serial number to start testing')
         self.enable_buttons(True)
         self.serialno_display.setText('')
         self.serialno_display.setFocus()
+        self.serialno_display.textChanged.connect(self.reinit)
 
     def upload_results(self):
-        try:
-            self.messages.setText('Uploading results...')
-            self.write_csv()
-            if self.mode_label.text() == 'PRODUCTION':
+        self.messages.setText('Uploading results...')
+        self.write_csv()
+        if self.mode_label.text() == 'PRODUCTION':
+            try:
                 if self.current_serial == self.golden_sn:
                     self.dbconn.log_golden_test(self.config['tester_code'], self.golden_sn, self.tail_details['status'])
                     self.golden_tested_flag = True
                 else:
                     success, error_code = self.dbconn.db_insert(self.head_details, self.bringup_results, self.tail_details)
                     if not success:
-                        QMessageBox.critical(self, 'Error', error_code, buttons=QMessageBox.StandardButton.Ok)
+                        QMessageBox.critical(self, 'Error', error_code, buttons=Q_OK)
+                # ret = self.dbconn.get_db_status(self.current_serial)
+            except Exception as e:
+                # print('upload failed')
+                QMessageBox.warning(self, 'Error', f'Database upload failed.\n{e}', Q_OK)
 
-            QTimer.singleShot(1, self.test_end)
-        except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+        QTimer.singleShot(1, self.test_end)
 
     def auto_fail(self):
         try:
@@ -351,22 +323,20 @@ class MainWindow(QMainWindow):
             self.unpair_cmd = ['daq/BluetoothDevicePairing.exe', 'unpair-by-mac', '--mac', self.mac_address, '--type', 'BluetoothLE']
             resp_unpair = subprocess.run(self.unpair_cmd)
 
-            # self.stacker.wifi_widget.restored = False
+            self.wifi_timer.stop()
             self.stacker.wifi_widget.forget_network()
             self.enable_supply(False)
-            # self.stacker.wifi_widget.restore_net()
 
             if self.stacker.wifi_widget.restored:
                 QTimer.singleShot(10, self.auto_fail_end)
-                return
-
-            try:
-                self.stacker.wifi_widget.net_restored.disconnect()
-            except TypeError:
-                pass
-            self.stacker.wifi_widget.net_restored.connect(self.auto_fail_end)
+            else:
+                try:
+                    self.stacker.wifi_widget.net_restored.disconnect()
+                except TypeError:
+                    pass
+                self.stacker.wifi_widget.net_restored.connect(self.auto_fail_end)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     def auto_fail_end(self):
         try:
@@ -388,9 +358,10 @@ class MainWindow(QMainWindow):
             self.pass_fail_output.setText("FAIL")
             self.pass_fail_output.setStyleSheet("background-color: rgb(245, 0, 0);")
 
-            QTimer.singleShot(1, self.upload_results)
+            self.stacker.wifi_widget.maintain_conn(True)
+            QTimer.singleShot(500, self.upload_results)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # End of functional test process
     def process_values(self):
@@ -399,7 +370,7 @@ class MainWindow(QMainWindow):
             self.activateWindow()
             self.test_progress.setValue(100)
             try:
-                self.stacker.wifi_widget.net_restored.disconnect(self.upload_results)
+                self.stacker.wifi_widget.net_restored.disconnect(self.process_values)
             except TypeError:
                 pass
 
@@ -420,10 +391,11 @@ class MainWindow(QMainWindow):
             # print('head -- ', self.head_details)
             # print('all -- ', self.all_results)
             # print('tail -- ', self.tail_details)
-            
-            QTimer.singleShot(1, self.upload_results)
+
+            self.stacker.wifi_widget.maintain_conn(True)
+            QTimer.singleShot(500, self.upload_results)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     def charging_status(self):
         try:
@@ -441,21 +413,20 @@ class MainWindow(QMainWindow):
             self.enable_supply(False)
             # self.stacker.wifi_widget.forget_network()
 
-            if self.stacker.wifi_widget.restored:
+            if self.config['use_lan'] or self.stacker.wifi_widget.restored:
                 QTimer.singleShot(1, self.process_values)
             else:
                 self.stacker.wifi_widget.net_restored.connect(self.process_values)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # Step 8. Charging Test
     def charging_test(self):
         try:
+            self.wifi_timer.stop()
             self.messages.setText('Charging device...')
             self.auto_abort_timer.start()
             print('Step 8 start')
-            # self.hw_timer.start(1000)
-            # resp_on = subprocess.run(self.relay_on_cmd)
             self.enable_supply(True)
             try:
                 self.stacker.done_stream.disconnect(self.close_stream)
@@ -469,41 +440,25 @@ class MainWindow(QMainWindow):
             self.stacker.wifi_widget.forget_network()
             QTimer.singleShot(5000, self.charging_status)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # Step 7 end
-    # def stream_end(self):
-    #     self.auto_abort_timer.start()
-    #     if 'STREAM_FAIL'
-
-    #     if self.device_model == 'S3' and len(self.stream_results) < 3:
-    #         QTimer.singleShot(1, self.get_stream)
-    #         return
-
-    #     self.http_manager.put('white', 
-    #                         f'http://{self.device_ip}/torch-mode', 
-    #                         'text/plain', 
-    #                         'off', 
-    #                         self.charging_test,
-    #                         100)
-        # QTimer.singleShot(1, self.charging_test)
-    
     def close_stream(self, curr_cam):
         try:
             self.auto_abort_timer.start()
-            idx = len(self.stream_results)
-            curr_cam = self.camera_list[idx]
-            t_name = curr_cam + '_stream'
+            # idx = len(self.stream_results)
+            # curr_cam = self.camera_list[idx]
+            # t_name = curr_cam + '_stream'
 
             if 'STREAM_FAIL' not in self.fail_reasons:
                 self.bringup_results['streaming'] = 1
-                self.append_result(t_name, '-', 'PASS')
+                self.append_result('stream', '-', 'PASS')
                 
-            if self.device_model == 'S3' and len(self.stream_results) < 3:
-                QTimer.singleShot(1, self.get_stream)
-                return
+            # if self.device_model == 'S3' and len(self.stream_results) < 3:
+            #     QTimer.singleShot(1, self.get_stream)
+            #     return
 
-            self.stacker.wifi_widget.maintain_conn()
+            # self.stacker.wifi_widget.maintain_conn()
             self.http_manager.put('white', 
                                 f'http://{self.device_ip}/torch-mode', 
                                 'text/plain', 
@@ -511,27 +466,27 @@ class MainWindow(QMainWindow):
                                 self.charging_test,
                                 100)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # Step 7. Streaming & Connectivity Test
     def get_stream(self):
         self.messages.setText('Starting stream...')
         self.auto_abort_timer.start()
-        idx = len(self.stream_results)
-        curr_cam = self.camera_list[idx]
-        t_name = curr_cam + '_stream'
+        # idx = len(self.stream_results)
+        # curr_cam = self.camera_list[idx]
+        # t_name = curr_cam + '_stream'
 
-        self.stacker.wifi_widget.maintain_conn()
+        # self.stacker.wifi_widget.maintain_conn()
 
         try:
-            stream_link = f'http://{self.device_ip}/preview-stream?camera={curr_cam}'
+            stream_link = f'http://{self.device_ip}/preview-stream?camera=center'
             self.stacker.onTop()
             self.stacker.stream_start(stream_link)
 
         except Exception as e:
-            resp = QMessageBox.critical(self, 'Error', str(e), QMessageBox.StandardButton.Yes)
-            self.stream_results[curr_cam] = 0
-            self.append_result(t_name, '-', 'FAIL', 'STREAM_FAIL')
+            resp = QMessageBox.critical(self, 'Error', str(e), Q_YES)
+            self.stream_results['center'] = 0
+            self.append_result('stream', '-', 'FAIL', 'STREAM_FAIL')
             QTimer.singleShot(10, self.auto_fail)
             return
 
@@ -581,11 +536,11 @@ class MainWindow(QMainWindow):
             self.auto_abort_timer.start()
             content = self.http_manager.read_response('white')
             
-            res = QMessageBox.information(self.stacker, 'Info', 'Are the white LEDs turned on?', buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if res == QMessageBox.StandardButton.Yes:
-                self.stacker.wifi_widget.maintain_conn()
+            res = QMessageBox.question(self.stacker, 'Info', 'Are the white LEDs turned on?', buttons=Q_YES | Q_NO)
+            if res == Q_YES:
+                # self.stacker.wifi_widget.maintain_conn()
                 self.append_result('led_white', '-', 'PASS')
-                self.lit80_retry = 4
+                self.lit80_retry = 6
                 self.current_mode = 'lit_80'
                 self.http_manager.post('lit_80_frame', 
                                     f'http://{self.device_ip}/take-pictures', 
@@ -596,7 +551,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(10, self.auto_fail)
                 return
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # Step 4: White LED Test
     def torch_test(self):
@@ -605,7 +560,7 @@ class MainWindow(QMainWindow):
             print('--- TORCH ON')
             self.messages.setText('Turning on Torch LEDs...')
             # increased delay to allow LEDs to turn on
-            self.stacker.wifi_widget.maintain_conn()
+            # self.stacker.wifi_widget.maintain_conn()
             self.http_manager.put('white', 
                                 f'http://{self.device_ip}/torch-mode', 
                                 'text/plain', 
@@ -613,11 +568,12 @@ class MainWindow(QMainWindow):
             # self.http_manager.put('fluorescent', f'http://{self.device_ip}/torch-mode', 'text/plain', 'fluorescent')
             QTimer.singleShot(2000, self.torch_enabled)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     def led_catcher(self, lumi_val):
         self.bringup_results['led_white'] = round(lumi_val, 3)
         self.append_temp('led_white', round(lumi_val, 3), '-')
+        # change to Not Temp when limits are finalized
         # if lumi_val > float(self.test_limits['led_luminance']['minimum']):
         #     self.append_result('led_white', lumi_val, 'PASS')
         # else:
@@ -633,9 +589,9 @@ class MainWindow(QMainWindow):
                 # DF test done, go to LF test
                 QTimer.singleShot(1, self.torch_test)
             elif len(self.cam_results['lit_110']) < len(self.cam_list):
-                self.stacker.wifi_widget.maintain_conn()
-                res = QMessageBox.information(self.stacker, 'IMPORTANT', 'Lift the DUT cradle to 110mm position then click OK', QMessageBox.StandardButton.Ok)
-                self.lit110_retry = 4
+                # self.stacker.wifi_widget.maintain_conn()
+                res = QMessageBox.information(self.stacker, 'IMPORTANT', 'Lift the DUT cradle to 110mm position then click OK', Q_OK)
+                self.lit110_retry = 6
                 self.current_mode = 'lit_110'
                 self.http_manager.post('lit_110_frame', 
                                             f'http://{self.device_ip}/take-pictures', 
@@ -666,11 +622,13 @@ class MainWindow(QMainWindow):
                 # else:
                 QTimer.singleShot(1, self.get_stream)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     def alt_meas_end(self, dict_values):
         print('----- incoming', dict_values)
         self.bringup_results = self.bringup_results | dict_values
+        for key, values in dict_values.items():
+            self.append_result(key, values, 'PASS')
 
     # Step 3.3/5.3: Receive test values
     def ft_measure_end(self, cam_name, mode, status):
@@ -693,7 +651,7 @@ class MainWindow(QMainWindow):
             else:
                 QTimer.singleShot(1, self.next_step)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # Step 3.2/5.2: Measure dark/lit frame parameters
     def start_measure(self, cam_name, mode):
@@ -712,14 +670,14 @@ class MainWindow(QMainWindow):
                 elif mode == 'lit_110':
                     self.stacker.lft_start(self.current_serial, cam_name, 110, content)
             except Exception as e:
-                res = QMessageBox.critical(self.stacker, 'Error', str(e), QMessageBox.StandardButton.Yes)
+                res = QMessageBox.critical(self.stacker, 'Error', str(e), Q_YES)
                 self.cam_results[mode].update({cam_name: 0})
                 self.append_temp(f'{cam_name}_cam_{mode}', '-', 'FAIL', 'CAM_FAIL')
                 QTimer.singleShot(10, self.process_values)
                 return
                 # QTimer.singleShot(1, self.next_step)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # For S3 model, receive left and right images into buffer
     def buffer(self, cam_name, id):
@@ -734,7 +692,7 @@ class MainWindow(QMainWindow):
             print(self.current_mode, 'image ids:', content)
             self.messages.setText('Retrieving image...')
 
-            self.stacker.wifi_widget.maintain_conn()
+            # self.stacker.wifi_widget.maintain_conn()
 
             if content:
                 self.cam_list = json.loads(str(content, 'utf-8')) # = {'center': id, 'left': id, 'right': id}
@@ -774,12 +732,12 @@ class MainWindow(QMainWindow):
                                             self.read_image_id,
                                             1000)
             else:
-                res = QMessageBox.critical(self, 'Error', 'Device API failed', QMessageBox.StandardButton.Yes)
+                res = QMessageBox.critical(self, 'Error', 'Device API failed', Q_YES)
                 self.fail_reasons.append('API_FAIL')
                 QTimer.singleShot(10, self.process_values)
                 return
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # Step 2 loopback/end
     def off_led_status(self):
@@ -794,8 +752,8 @@ class MainWindow(QMainWindow):
             else:
                 print(self.ui_results)
                 response = self.http_manager.read_response('default')
-                self.stacker.wifi_widget.maintain_conn()
-                self.dark_test_retry = 4
+                # self.stacker.wifi_widget.maintain_conn()
+                self.dark_test_retry = 6
                 self.current_mode = 'dark'
                 self.cam_results = {'dark': {}, 'lit_80': {}, 'lit_110': {}}
                 self.http_manager.post('dark_frame', 
@@ -803,7 +761,7 @@ class MainWindow(QMainWindow):
                                     self.read_image_id,
                                     1000)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     def off_request(self):
         try:
@@ -816,7 +774,7 @@ class MainWindow(QMainWindow):
                                 self.off_led_status,
                                 100)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # Step 2 loop: turn off LED
     def read_led_status(self):
@@ -825,13 +783,17 @@ class MainWindow(QMainWindow):
             id = self.ui_colors[self.curr_color]
             response = self.http_manager.read_response(id)
 
-            ind_status, rgb_values = self.stacker.add_ind_led(id)
+            # ind_status, rgb_values = self.stacker.add_ind_led(id)
+            ind_result = self.stacker.add_ind_led(id)
+            ind_status = ind_result.get('status')
+            rgb_values = ind_result.get('value')
+            limits = ind_result.get('limits')
             print(id, ind_status, self.led_retry)
             if ind_status:
                 self.ui_results[id] = ind_status
                 self.bringup_results[f"ui_{id}"] = rgb_values
-                self.append_result(f'ui_{id}', rgb_values, 'PASS')
-                # res = QMessageBox.information(self.stacker, 'Info', f'UI Led: {id}', QMessageBox.StandardButton.Yes)
+                self.append_result(f'ui_{id}', rgb_values, 'PASS', low=limits)
+                # res = QMessageBox.information(self.stacker, 'Info', f'UI Led: {id}', Q_YES)
                 QTimer.singleShot(1000, self.off_request)
             elif self.led_retry:
                 self.__reset_leds()
@@ -846,17 +808,17 @@ class MainWindow(QMainWindow):
             else:
                 self.ui_results[id] = ind_status
                 self.bringup_results[f"ui_{id}"] = rgb_values
-                self.append_result(f'ui_{id}', rgb_values, 'FAIL', 'LED_IND_FAIL')
+                self.append_result(f'ui_{id}', rgb_values, 'FAIL', 'LED_IND_FAIL', low=limits)
                 QTimer.singleShot(10, self.auto_fail)
                 return
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # Step 2 loop: turn on LED
     def get_led_status(self):
         try:
             self.auto_abort_timer.start()
-            self.led_retry = 4
+            self.led_retry = 6
             self.messages.setText(f'Testing indicator LEDs: {self.ui_colors[self.curr_color].upper()}')
             ui_led_ctrl = {"color": self.ui_colors[self.curr_color], "on": True}
             self.http_manager.put(self.ui_colors[self.curr_color], 
@@ -866,7 +828,7 @@ class MainWindow(QMainWindow):
                                 self.read_led_status,
                                 100)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     def __reset_leds(self):
         for col in self.ui_colors:
@@ -890,7 +852,7 @@ class MainWindow(QMainWindow):
             # Some delay to wait for LEDs to turn off
             QTimer.singleShot(1500, self.get_led_status)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # Step 1 end
     def read_device_status(self):
@@ -930,12 +892,28 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(10, self.auto_fail)
                 return
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+
+    def fail_catcher(self, fail_reason):
+        if self.bt_wifi_retries > 0:
+            self.auto_abort_timer.start()
+            print('retrying...', self.bt_wifi_retries)
+            self.stacker.bt_widget.progress_status.connect(self.messages.setText)
+            self.stacker.wifi_widget.conn_success.connect(self.get_device_status)
+            self.bt_wifi_retries -= 1
+            self.stacker.start_bt_scan(self.mac_address)
+        else:
+            self.add_fail_reason(fail_reason)
 
     # Step 1: Pre-flight Diagnostics
     def get_device_status(self, conn_status):
         try:
             self.auto_abort_timer.start()
+            try:
+                self.stacker.fail_reason.disconnect(self.fail_catcher)
+                self.stacker.fail_reason.connect(self.add_fail_reason)
+            except TypeError:
+                pass
             try:
                 self.stacker.bt_widget.progress_status.disconnect(self.messages.setText)
                 self.stacker.wifi_widget.conn_success.disconnect(self.get_device_status)
@@ -955,71 +933,80 @@ class MainWindow(QMainWindow):
 
             if not self.device_ip:
                 self.append_result('ip_address', '-', 'FAIL', 'WIFI_FAIL')
-                # resp = QMessageBox.warning(self, 'Error', 'No IP Address', QMessageBox.StandardButton.Ok)
+                # resp = QMessageBox.warning(self, 'Error', 'No IP Address', Q_OK)
                 QTimer.singleShot(10, self.auto_fail)
                 return
             else:
                 self.bringup_results['ip_address'] = self.device_ip
                 self.append_result('ip_address', self.device_ip, 'PASS')
 
+            self.wifi_timer.start()
             # Check DUT status and diagnostic details
             self.messages.setText('Reading diagnostic status...')
-            self.status_retries = 4
+            self.status_retries = 6
             self.http_manager.get('status', 
                                 f'http://{self.device_ip}/status', 
                                 self.read_device_status,
                                 1500)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     # Step 0: DUT Scanning & Pairing
     def get_device_mac(self):
         try:
-            # self.auto_abort_timer.start()
+            self.auto_abort_timer.start()
             # self.mac_address = 'CC:C8:37:2F:8B:29'
             
             result = self.dbconn.get_ble_mac(self.current_serial)
             if 'error' in  result:
                 if self.mode_label.text() == 'PRODUCTION':
                     self.append_result('bt_mac', '-', 'FAIL', 'NO_MAC')
-                    # res = QMessageBox.critical(self, 'Error', mac_error, QMessageBox.StandardButton.Yes)
+                    # res = QMessageBox.critical(self, 'Error', mac_error, Q_YES)
                     QTimer.singleShot(10, self.auto_fail)
                     return
                 else:
                     self.mac_address = 'CC:C8:37:2F:8B:29'
             else:
-                self.append_result('bt_mac', result.get('bt_mac'), 'PASS')
                 self.mac_address = result.get('bt_mac')
 
             self.bringup_results['bt_mac'] = self.mac_address
+            self.append_result('bt_mac', self.mac_address, 'PASS')
             
             self.stacker.onTop()
+            try:
+                self.stacker.fail_reason.disconnect(self.add_fail_reason)
+            except TypeError:
+                pass
+            self.stacker.fail_reason.connect(self.fail_catcher)
             self.stacker.bt_widget.progress_status.connect(self.messages.setText)
             self.stacker.wifi_widget.conn_success.connect(self.get_device_status)
+            self.bt_wifi_retries = 2
             self.stacker.start_bt_scan(self.mac_address)
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     def start_test(self):
         try:
             # self.forget_connection()
             if not self.hw_serial:
-                res = QMessageBox.critical(self, 'Error', 'Power Supply not detected', QMessageBox.StandardButton.Ok)
-                # return
+                res = QMessageBox.critical(self, 'Error', 'Power Supply not detected', Q_OK)
+                if self.mode_label.text() == 'PRODUCTION':
+                    return
             
+            self.serialno_display.textChanged.disconnect(self.reinit)
             if self.current_serial == '':
                 val = self.validate_serial()
                 if not val:
                     return
-            
+
             self.stacker.reset_holders()
-            # resp_off = subprocess.run(self.relay_off_cmd)
             self.enable_supply(False)
 
-            self.head_details['serial_num'] = self.current_serial
-            self.head_details['po_num'] = self.ponum_display.text()
+            self.head_details['serial_num'] = self.current_serial.upper()
+            self.append_temp('serial_num', self.current_serial.upper(), '-')
+            self.head_details['po_num'] = self.ponum_display.text().upper()
             if len(self.config['tester_code']) > 0:
-                self.head_details['tester_code'] = self.config['tester_code']
+                self.head_details['tester_code'] = self.config['tester_code'].upper()
             self.head_details.update(self.login_details)
             self.enable_buttons(False)
 
@@ -1043,50 +1030,63 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(1, self.get_device_mac)
             
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     def validate_serial(self):
+        self.stacker.wifi_widget.maintain_conn(True)
         try:
-            if self.login_button.text() == 'Login':
-                QMessageBox.information(self, 'Info', 'Please login to start testing', buttons=QMessageBox.StandardButton.Ok)
-                self.oprtr_en_input.setFocus()
+            user = self.oprtr_display.text()
+            shift = self.shift_display.text()
+            if not (user and shift):
+                # if self.mode_label.text() == 'PRODUCTION':
+                QMessageBox.information(self, 'Info', 'Please login to start testing', buttons=Q_OK)
+                QTimer.singleShot(10, self.open_settings)
+                self.serialno_display.setText('')
                 return False
 
             self.init_test_variables()
-            self.current_serial = self.serialno_display.text().strip().upper()
+            self.current_serial = self.serialno_display.text()
             if not self.current_serial:
-                QMessageBox.information(self, 'Info', 'Enter serial number to test', buttons=QMessageBox.StandardButton.Ok)
+                QMessageBox.information(self, 'Info', 'Enter serial number to test', buttons=Q_OK)
                 self.serialno_display.setFocus()
                 return False
-
-            # regex = re.fullmatch(r"K/d{11}", self.current_serial)
-            # if self.mode_label.text() == 'PRODUCTION' and not regex:
-            #     QMessageBox.information(self, 'Info', 'Incorrect serial number format', buttons=QMessageBox.StandardButton.Ok)
-            #     return
+            
+            self.current_serial = self.current_serial.upper()
+            if self.mode_label.text() == 'PRODUCTION':
+                self.golden_tested_flag, self.golden_sn = self.dbconn.get_golden_logs(self.config['tester_code'])
+                # print(self.golden_tested_flag, self.golden_sn)
+                if self.current_serial != self.golden_sn:
+                    if not self.golden_tested_flag:
+                        QMessageBox.critical(self, 'Error', 'Please test the Golden Sample first', Q_OK)
+                        return False
 
             db_status = self.dbconn.get_db_status(self.current_serial)
-            if 'error' in db_status:
-                QMessageBox.warning(self, 'Error', db_status['error'], buttons=QMessageBox.StandardButton.Ok)
-                if self.mode_label.text() == 'PRODUCTION':
+            if 'Database connection error' in db_status.get('error', ''):
+                self.stacker.wifi_widget.maintain_conn(True)
+                QTimer.singleShot(2000, self.validate_serial)
+                return
+
+            if 'error' in db_status and self.mode_label.text() == 'PRODUCTION':
+                QMessageBox.warning(self, 'Error', db_status['error'], buttons=Q_OK)
+                # if self.mode_label.text() == 'PRODUCTION':
+                return False
+
+            if db_status.get('need_pass', False):
+                text, ok = QInputDialog.getText(self, 'Retest authorization', 'Password:', QLineEdit.EchoMode.Password)
+                if ok and text == decrypt(self.config['fa_password']):
+                    pass
+                else:
                     return False
 
             po_num = db_status.get('po_num', '')
             self.ponum_display.setText(po_num)
             test_rep = db_status.get('test_rep', 1)
 
-            if self.mode_label.text() == 'PRODUCTION':
-                self.golden_tested_flag, self.golden_sn = self.dbconn.get_golden_logs(self.config['tester_code'])
-                # print(self.golden_tested_flag, self.golden_sn)
-                if self.current_serial != self.golden_sn:
-                    if not self.golden_tested_flag:
-                        QMessageBox.critical(self, 'Error', 'Please test the Golden Sample first', QMessageBox.StandardButton.Ok)
-                        return False
-
             self.tail_details['test_rep'] = test_rep
             self.start_test_button.setEnabled(True)
             return True
         except Exception as e:
-            QMessageBox.warning(self, 'Exception occurred', str(e), Q_OK)
+            QMessageBox.warning(self, 'Error', str(e), Q_OK)
 
     def load_s3_calib(self):
         self.s3_calib_poses = {}
@@ -1132,6 +1132,7 @@ class MainWindow(QMainWindow):
             db_station = parser.get('Database', 'Station')
 
             self.config['database'] = {'host': db_host, 'customer': db_schema, 'model': db_model, 'station': db_station}
+            self.config['use_lan'] = parser.getboolean('Database', 'LAN')
             self.dbconn = DatabaseConn(self.config['database'])
             if 'S3' in db_model and 'M1' not in db_model:
                 self.device_model = 'S3'
@@ -1179,26 +1180,22 @@ class MainWindow(QMainWindow):
             writer.writerow(final)
 
     def closeEvent(self, event):
-    #     if not self.isActiveWindow():
-    #         self.activateWindow()
-    #     result = QMessageBox.warning(self, 'Warning', 'Are you sure you want to exit?', 
-    #                         buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-
-    #     if result == QMessageBox.StandardButton.Yes:
-        try:
-            self.goniometer.stop_disconnect()
-        except:
-            pass
-        self.stacker.destroy()
-        event.accept()
-    #     else:
-    #         event.ignore()
+        response = QMessageBox.question(self, 'Exit app', "Confirm exit?", Q_YES|Q_NO)
+        if response == Q_YES:
+            try:
+                self.goniometer.stop_disconnect()
+            except:
+                pass
+            self.stacker.destroy()
+            event.accept()
+        else:
+            event.ignore()
 
 if __name__=='__main__':
     # CLI_PREFIX = os.getenv('CLI_PREFIX', 'C:\\Users\\ai\\')
     app = QApplication(sys.argv)
     app.setStyle('windowsvista')
-    window = MainWindow('v1.2.1')
+    window = MainWindow('v1.2.2')
     window.show()
 
     # Start the event loop.

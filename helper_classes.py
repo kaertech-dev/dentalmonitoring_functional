@@ -7,11 +7,15 @@ from datetime import datetime
 from pywifi import const
 
 import PyQt6.QtBluetooth as QtBt
-from PyQt6.QtWidgets import QApplication, QDialog, QGraphicsScene, QWidget, QButtonGroup, QGraphicsRectItem, QGraphicsLineItem
+from PyQt6.QtWidgets import QApplication, QDialog, QGraphicsScene, QWidget, QButtonGroup, QGraphicsRectItem, QGraphicsLineItem, QMessageBox
 from PyQt6.QtGui import QPen, QColor, QPixmap, QImage, QBrush, QStandardItemModel, QStandardItem
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer, QUrl, QObject, QByteArray
 from PyQt6 import uic
+
+Q_OK = QMessageBox.StandardButton.Ok
+Q_YES = QMessageBox.StandardButton.Yes
+Q_NO = QMessageBox.StandardButton.No
 
 _cv2cap = {}
 def SingletonCamera(src: int) -> cv2.VideoCapture:
@@ -26,6 +30,73 @@ def get_path(raw_path):
     except Exception:
         ret = os.path.join('.', raw_path)
     return ret
+
+class SettingsBox(QDialog):
+    def __init__(self, oprtr_en, shift):
+        super().__init__()
+        uic.loadUi(get_path('layout/settings_box.ui'), self)
+        self.oprtr_en_input.setText(oprtr_en)
+        self.oprtr_en_input.setFocus()
+        self.shift_input.setCurrentText(shift)
+        self.dev_button.clicked.connect(self.set_dev)
+        self.prod_button.clicked.connect(self.set_prod)
+        self.output = {'oprtr_en': '', 'shift': '', 'mode': ''}
+
+    def set_dev(self):
+        user = self.oprtr_en_input.text().strip()
+        shift = self.shift_input.currentText().strip()
+        if not (user and shift):
+            QMessageBox.information(self, 'Info', 'Please enter all details', Q_OK)
+            return
+        
+        # self.mode = 'DEVELOPMENT'
+        self.output['operator_en'] = user.upper()
+        self.output['shift'] = shift.upper()
+        self.output['mode'] = 'DEVELOPMENT'
+        self.accept()
+
+    def set_prod(self):
+        user = self.oprtr_en_input.text().strip()
+        shift = self.shift_input.currentText().strip()
+        if not (user and shift):
+            QMessageBox.information(self, 'Info', 'Please enter all details', Q_OK)
+            return
+        
+        self.output['operator_en'] = user.upper()
+        self.output['shift'] = shift.upper()
+        self.output['mode'] = 'PRODUCTION'
+        # self.mode = 'PRODUCTION'
+        self.accept()
+
+class VideoThread(QThread):
+    change_pixmap_signal = pyqtSignal(np.ndarray)
+    stream_error = pyqtSignal(str)
+
+    def __init__(self, source=0):
+        super().__init__()
+        self._run_flag = True
+        self.source = source
+        if type(source) == int:
+            self.cap = SingletonCamera(source)
+        else:
+            self.cap = cv2.VideoCapture(source)
+
+        if not self.cap.isOpened():
+            self.cap.release()
+            raise cv2.error(f"Cannot open video source {source}")
+
+    def run(self):
+        while self._run_flag:
+            ret, frame = self.cap.read()
+            if ret:
+                try:
+                    self.change_pixmap_signal.emit(frame)
+                except:
+                    self.stream_error.emit('STREAM_FAIL')
+
+    def stop(self):
+        self._run_flag = False
+        self.wait()
 
 class Bluetooth(QWidget):
     ip_addr_found = pyqtSignal(str)
@@ -85,12 +156,6 @@ class Bluetooth(QWidget):
     
     def set_mac(self, mac_address):
         self.mac_object = QtBt.QBluetoothAddress(mac_address)
-
-    def auto_abort(self):
-        # self.parent().progress_msg.setText('BLE FAIL')
-        # self.fail_reason.emit('NO_BLE')
-        # self.abortAll()
-        pass
     
     def abortAll(self):
         self.timer.stop()
@@ -443,57 +508,11 @@ class HTTPRequest(QObject):
 
         self.responses = {}
 
-class SettingsBox(QDialog):
-    def __init__(self):
-        super().__init__()
-        uic.loadUi(get_path('layout/settings_box.ui'), self)
-        self.dev_button.clicked.connect(self.set_dev)
-        self.prod_button.clicked.connect(self.set_prod)
-        self.mode = ''
-
-    def set_dev(self):
-        self.mode = 'DEVELOPMENT'
-        self.accept()
-
-    def set_prod(self):
-        self.mode = 'PRODUCTION'
-        self.accept()
-
-class VideoThread(QThread):
-    change_pixmap_signal = pyqtSignal(np.ndarray)
-    stream_error = pyqtSignal(str)
-
-    def __init__(self, source=0):
-        super().__init__()
-        self._run_flag = True
-        self.source = source
-        if type(source) == int:
-            self.cap = SingletonCamera(source)
-        else:
-            self.cap = cv2.VideoCapture(source)
-
-        if not self.cap.isOpened():
-            self.cap.release()
-            raise cv2.error(f"Cannot open video source {source}")
-
-    def run(self):
-        while self._run_flag:
-            ret, frame = self.cap.read()
-            if ret:
-                try:
-                    self.change_pixmap_signal.emit(frame)
-                except:
-                    self.stream_error.emit('STREAM_FAIL')
-
-    def stop(self):
-        self._run_flag = False
-        self.wait()
-
 class WifiThread(QObject):
     conn_success = pyqtSignal(bool)
     net_restored = pyqtSignal(bool)
     fail_reason = pyqtSignal(str)
-    def __init__(self, ssid, passkey):
+    def __init__(self, ssid: str, passkey: str, using_lan: bool):
         super().__init__()
 
         wifi = pywifi.PyWiFi()
@@ -523,11 +542,12 @@ class WifiThread(QObject):
         self.max_timeout = (1000/check_interval) * 60
         self.counter = 0
         self.restored = False
+        self.using_lan = using_lan
 
-    def restore_net(self):
-        self.counter = 0
-        self.restore_t.start()
-        self.iface.connect(self.default_profile)
+    # def restore_net(self):
+    #     self.counter = 0
+    #     self.restore_t.start()
+    #     self.iface.connect(self.default_profile)
 
     def check_restore(self):
         if self.iface.status() == const.IFACE_CONNECTED:
@@ -562,19 +582,22 @@ class WifiThread(QObject):
         self.iface.connect(self.profile)
         # QTimer.singleShot(500, lambda: self.conn_success.emit(True))
     
-    def maintain_conn(self):
+    def maintain_conn(self, default=False):
         if self.iface.status() == const.IFACE_CONNECTED:
             print('----- still connected')
-        else:
+        elif not default:
             self.iface.connect(self.profile)
+        elif not self.using_lan:
+            self.iface.connect(self.default_profile)
 
     def forget_network(self):
         self.iface.disconnect()
         self.iface.remove_network_profile(self.profile)
 
         self.counter = 0
-        self.restore_t.start()
-        self.iface.connect(self.default_profile)
+        if not self.using_lan:
+            self.restore_t.start()
+            self.iface.connect(self.default_profile)
 
     def check_connected(self):
         if self.iface.status() == const.IFACE_CONNECTED:
@@ -602,7 +625,7 @@ class StackedUI(QDialog):
     fail_reason = pyqtSignal(str)
     alt_signal = pyqtSignal(dict)
 
-    def __init__(self, duration, cam_source, cam_params, test_limits, dut_ssid, dut_pass):
+    def __init__(self, duration, cam_source, cam_params, test_limits, dut_ssid, dut_pass, lan_conn):
         super().__init__()
         uic.loadUi(get_path('layout/widget_stack.ui'), self)
 
@@ -610,7 +633,7 @@ class StackedUI(QDialog):
         self.bench_pc.setPixmap(QPixmap(get_path(r"static/computer-2.png")))
 
         self.bt_widget = Bluetooth(dut_ssid, dut_pass, self)
-        self.wifi_widget = WifiThread(dut_ssid, dut_pass)
+        self.wifi_widget = WifiThread(dut_ssid, dut_pass, lan_conn)
         self.bt_widget.ip_addr_found.connect(self.wifi_widget.run)
         self.bt_widget.fail_reason.connect(self.fail_reason.emit)
         self.wifi_widget.fail_reason.connect(self.fail_reason.emit)
@@ -706,21 +729,27 @@ class StackedUI(QDialog):
         red_ave = np.average(red_hist, weights=weights).item()
         total = (blue_ave + red_ave + green_ave)
 
+        limit = self.test_limits['indicator_led'].get(color_name)
+        red_l, green_l, blue_l = limit.split(',')
+
         if total == 0:
-            return 0, '0,0,0'
+            # return 0, '0,0,0'
+            return {'status': 0, 'value': '0,0,0', 'limits': limit}
         
         red = round(100 * red_ave / total, 2)
         green = round(100 * green_ave / total, 2)
         blue = round(100 * blue_ave / total, 2)
         print(f"{color_name} = {red:.5f}, {green:.5f}, {blue:.5f}")
 
-        limit = self.test_limits['indicator_led'].get(color_name)
-        red_l, green_l, blue_l = limit.split(',')
+        # limit = self.test_limits['indicator_led'].get(color_name)
+        # red_l, green_l, blue_l = limit.split(',')
 
         if red >= float(red_l) and green >= float(green_l) and blue >= float(blue_l):
-            return 1, f"{red},{green},{blue}"
+            # return 1, f"{red},{green},{blue}"
+            return {'status': 1, 'value': f"{red},{green},{blue}", 'limits': limit}
         else:
-            return 0, f"{red},{green},{blue}"
+            # return 0, f"{red},{green},{blue}"
+            return {'status': 0, 'value': f"{red},{green},{blue}", 'limits': limit}
 
     def add_ind_led(self, color):
         if self.stacked_ui.currentWidget() != self.ind_led_test:
@@ -778,122 +807,176 @@ class StackedUI(QDialog):
         pixmap = QPixmap()
         pixmap.loadFromData(content)
         self.dft_pixlabel.setPixmap(pixmap)
-        raw_image = self.bytesToImage(content)
+        try:
+            raw_image = self.bytesToImage(content)
         
-        cv2.imwrite(f'photos/{serial_num}_dark.jpg', raw_image)
-        
-        grayscale = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
-        mono_hist = cv2.calcHist([grayscale], [0], None, [256], [0,256])
-        
-        # measure luminance
-        average_luminance = np.average(grayscale, axis=(0,1)).item()
-        
-        # measure hot pixels
-        hot_pixels = int(mono_hist[255])
+            cv2.imwrite(f'photos/{serial_num}_dark.jpg', raw_image)
+            
+            grayscale = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
+            mono_hist = cv2.calcHist([grayscale], [0], None, [256], [0,256])
+            
+            # measure luminance
+            average_luminance = np.average(grayscale, axis=(0,1)).item()
+            
+            # measure hot pixels
+            hot_pixels = int(mono_hist[255])
 
-        # snr
-        mean_val, std_dev = cv2.meanStdDev(grayscale)
-        mean_val = mean_val[0][0]
-        std_dev = std_dev[0][0]
+            # snr
+            mean_val, std_dev = cv2.meanStdDev(grayscale)
+            mean_val = mean_val[0][0]
+            std_dev = std_dev[0][0]
 
-        if std_dev != 0:
-            snr_db = 20 * np.log10(mean_val / std_dev)
-        else:
-            snr_db = float('inf')
+            if std_dev != 0:
+                snr_db = 20 * np.log10(mean_val / std_dev)
+            else:
+                snr_db = float('inf')
 
-        # self.df_results = {'lum': round(average_luminance, 2), 'snr': round(snr_db.item(), 2)}
-        
-        alt_results = {'df_lumi': round(average_luminance, 2), 'df_snr': round(snr_db.item(), 2)}
-        self.alt_signal.emit(alt_results)
-        dft_status = self.get_final_status('dark_frame_test', alt_results)
-        self.done_measure.emit(cam_name, 'dark', dft_status)
+            # self.df_results = {'lum': round(average_luminance, 2), 'snr': round(snr_db.item(), 2)}
+            
+            alt_results = {'df_lumi': round(average_luminance, 2), 'df_snr': round(snr_db.item(), 2)}
+            self.alt_signal.emit(alt_results)
+            dft_status = self.get_final_status('dark_frame_test', alt_results)
+            self.done_measure.emit(cam_name, 'dark', dft_status)
+        except TypeError:
+            alt_results = {'df_lumi': -1, 'df_snr': 0}
+            self.alt_signal.emit(alt_results)
+            self.done_measure.emit(cam_name, 'dark', 0)
 
     def lft_start(self, serial_num, cam_name, distance, content):
         pixmap = QPixmap()
         pixmap.loadFromData(content)
-        raw_image = self.bytesToImage(content)
+        try:
+            raw_image = self.bytesToImage(content)
 
-        if distance == 80:
-            cv2.imwrite(f'photos/{serial_num}_lf80.jpg', raw_image)
-            self.camera_name_lft80.setText(cam_name.upper())
-            self.s3_lft80.setChecked(True)
-            self.lft_80_pixlabel.setPixmap(pixmap)
-        elif distance == 110:
-            cv2.imwrite(f'photos/{serial_num}_lf110.jpg', raw_image)
-            self.camera_name_lft110.setText(cam_name.upper())
-            self.s4_lft110.setChecked(True)
-            self.lft_110_pixlabel.setPixmap(pixmap)
+            if distance == 80:
+                # cv2.imwrite(f'photos/{serial_num}_lf80.jpg', raw_image)
+                self.camera_name_lft80.setText(cam_name.upper())
+                self.s3_lft80.setChecked(True)
+                self.lft_80_pixlabel.setPixmap(pixmap)
+            elif distance == 110:
+                # cv2.imwrite(f'photos/{serial_num}_lf110.jpg', raw_image)
+                self.camera_name_lft110.setText(cam_name.upper())
+                self.s4_lft110.setChecked(True)
+                self.lft_110_pixlabel.setPixmap(pixmap)
 
-        grayscale = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
-        if distance == 110:
-            average_luminance = np.average(grayscale, axis=(0,1)).item()
-            self.led_okay.emit(average_luminance)
-        
-        mono_hist = cv2.calcHist([grayscale], [0], None, [256], [0,256])
-        # blue_hist = cv2.calcHist([self.raw_image], [0], None, [256], [0,256])
-        # green_hist = cv2.calcHist([self.raw_image], [1], None, [256], [0,256])
-        # red_hist = cv2.calcHist([self.raw_image], [2], None, [256], [0,256])
+            grayscale = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
+            if distance == 110:
+                average_luminance = round(np.average(grayscale, axis=(0,1)).item(), 3)
+                self.led_okay.emit(average_luminance)
+            
+            # mono_hist = cv2.calcHist([grayscale], [0], None, [256], [0,256])
+            # blue_hist = cv2.calcHist([self.raw_image], [0], None, [256], [0,256])
+            # green_hist = cv2.calcHist([self.raw_image], [1], None, [256], [0,256])
+            # red_hist = cv2.calcHist([self.raw_image], [2], None, [256], [0,256])
 
-        # measure dead pixels
-        # num_dead_pixels = mono_hist[0].item()
-        num_dead_pixels = -1
+            # measure dead pixels
+            # num_dead_pixels = mono_hist[0].item()
+            # num_dead_pixels = -1
 
-        # align the image using dot grid
-        # rot_angle = self.getAngle(self.raw_image)
-        # adjusted = self.alignImage(self.raw_image, rot_angle)
+            # align the image using dot grid
+            # rot_angle = self.getAngle(self.raw_image)
+            # adjusted = self.alignImage(self.raw_image, rot_angle)
 
-        # get maximum and minimum pixel value
-        min_int = np.amin(grayscale).item()
-        max_int = np.amax(grayscale).item()
+            try:
+                # Michelson contrast
+                min_int = np.amin(grayscale).item()
+                max_int = np.amax(grayscale).item()
+                m_cont = round((max_int - min_int) / (max_int + min_int), 4)
+                # !! if minimum int = 0, it would always return a value of 1.0
+            except:
+                m_cont = None
 
-        # Michelson contrast
-        m_cont = round((max_int - min_int) / (max_int + min_int), 4)
-        # !! if minimum = zero since it would always return a value of 1.0
+            try:
+                # color ratio
+                channel_sums = np.sum(raw_image, axis=(0,1))
+                blue_sum = channel_sums[0].item()
+                green_sum = channel_sums[1].item()
+                red_sum = channel_sums[2].item()
+                r2g_ratio = round(red_sum / green_sum, 4)
+                b2g_ratio = round(blue_sum / green_sum, 4)
+            except:
+                r2g_ratio = None
+                b2g_ratio = None
 
-        # color ratio
-        channel_sums = np.sum(raw_image, axis=(0,1))
-        blue_sum = channel_sums[0].item()
-        green_sum = channel_sums[1].item()
-        red_sum = channel_sums[2].item()
-        r2g_ratio = round(red_sum / green_sum, 4)
-        b2g_ratio = round(blue_sum / green_sum, 4)
+            # calculate mtf50 = 100% * Cf/Co, where C = (Vmax - Vmin)/(Vmax + Vmin)
+            # Co = Vmax & Vmin at low-frequency (i.e. clear sharp edge)
+            # Cf = Vmax & Vmin where the mtf50 value is 50%
 
-        # Sector Balance
+            try:
+                # sharpness method 1:
+                laplacian = cv2.Laplacian(grayscale, cv2.CV_64F)
+                variance = laplacian.var()
+                print('lapvar', variance) # higher value = sharper
 
-        # get resolution in lp/mm
-        # group = self.reso_grp_input.value()
-        # element = self.reso_elem_input.value()
-        # resolution = 2**(group + ((element-1)/6))
+                # sharpness method 2:
+                gx = cv2.Sobel(grayscale, cv2.CV_64F, 1, 0, ksize=3)
+                gy = cv2.Sobel(grayscale, cv2.CV_64F, 0, 1, ksize=3)
+                gradient = gx**2 + gy**2
+                sobel = np.mean(gradient)
+                print('sobel', sobel) # higher value = sharper
+            except:
+                variance = None
+                sobel = None
 
-        # calculate mtf50 = 100% * Cf/Co, where C = (Vmax - Vmin)/(Vmax + Vmin)
-        # Co = Vmax & Vmin at low-frequency (i.e. clear sharp edge)
-        # Cf = Vmax & Vmin where the mtf50 value is 50%
+            cv2.imwrite(f'photos/{serial_num}_lf{distance}_{variance}/{sobel}.jpg', raw_image)
 
-        mean_val, std_dev = cv2.meanStdDev(grayscale)
-        mean_val = mean_val[0][0]
-        std_dev = std_dev[0][0]
+            try:
+                # dot grid detection
+                circle_count = 0
+                ret, thresh1 = cv2.threshold(grayscale, 70, 255, cv2.THRESH_TOZERO)
+                contours, _ = cv2.findContours(thresh1, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                for i, ctr in enumerate(contours):
+                    (x,y), radius = cv2.minEnclosingCircle(ctr)
+                    if radius <= 13 and radius >= 5:
+                        circle_count += 1
+            except:
+                circle_count = None
 
-        if std_dev != 0:
-            snr_db = 20 * np.log10(mean_val / std_dev)
-        else:
-            snr_db = float('inf')
+            try:
+                mean_val, std_dev = cv2.meanStdDev(grayscale)
+                mean_val = mean_val[0][0]
+                std_dev = std_dev[0][0]
 
-        # self.lf_results = {'resolution': -1, 'light_balance': -1, 'contrast': m_cont, 
-        #                     'r2g_ratio': r2g_ratio, 'b2g_ratio': b2g_ratio, 
-        #                     'snr': round(snr_db.item(), 2), 'dead_pixels': num_dead_pixels, 'dot_count': -1}
-        
-        if distance == 80:
-            alt_results = {'lf80_reso': -1, 'lf80_contrast': m_cont, 
-                                'lf80_r2g': r2g_ratio, 'lf80_b2g': b2g_ratio, 
-                                'lf80_snr': round(snr_db.item(), 2), 'lf80_dotgrid': -1}
-        elif distance == 110:
-            alt_results = {'lf110_reso': -1, 'lf110_contrast': m_cont, 
-                                'lf110_r2g': r2g_ratio, 'lf110_b2g': b2g_ratio, 
-                                'lf110_snr': round(snr_db.item(), 2), 'lf110_dotgrid': -1}
+                if std_dev != 0:
+                    snr_db = 20 * np.log10(mean_val / std_dev)
+                    snr_db = round(snr_db.item(), 2)
+                else:
+                    snr_db = None
+            except:
+                snr_db = None
+            
+            # if distance == 80:
+            #     alt_results = {'lf80_reso': -1, 'lf80_contrast': m_cont, 
+            #                         'lf80_r2g': r2g_ratio, 'lf80_b2g': b2g_ratio, 
+            #                         'lf80_snr': round(snr_db.item(), 2), 'lf80_dotgrid': circle_count}
+            # elif distance == 110:
+            #     alt_results = {'lf110_reso': -1, 'lf110_contrast': m_cont, 
+            #                         'lf110_r2g': r2g_ratio, 'lf110_b2g': b2g_ratio, 
+            #                         'lf110_snr': round(snr_db.item(), 2), 'lf110_dotgrid': circle_count}
 
-        self.alt_signal.emit(alt_results)
-        lft_status = self.get_final_status(f'lit_frame_{distance}mm', alt_results)
-        self.done_measure.emit(cam_name, f'lit_{distance}', lft_status)
+            temp = {'reso': -1, 'contrast': m_cont, 
+                    'r2g': r2g_ratio, 'b2g': b2g_ratio, 
+                    'snr': snr_db, 'dotgrid': circle_count}
+
+            alt_results = {}
+            for key, value in temp.items():
+                alt_results[f"lf{distance}_{key}"] = value
+
+            self.alt_signal.emit(alt_results)
+            lft_status = self.get_final_status(f'lit_frame_{distance}mm', alt_results)
+            self.done_measure.emit(cam_name, f'lit_{distance}', lft_status)
+        except:
+            if distance == 80:
+                alt_results = {'lf80_reso': -1, 'lf80_contrast': -1, 
+                                'lf80_r2g': -1, 'lf80_b2g': -1, 
+                                'lf80_snr': 0, 'lf80_dotgrid': -1}
+            elif distance == 110:
+                alt_results = {'lf110_reso': -1, 'lf110_contrast': -1, 
+                                'lf110_r2g': -1, 'lf110_b2g': -1, 
+                                'lf110_snr': 0, 'lf110_dotgrid': -1}
+
+            self.alt_signal.emit(alt_results)
+            self.done_measure.emit(cam_name, f'lit_{distance}', 0)
 
     def get_final_status(self, test_name: str, raw_values: dict):
         params_list = self.test_limits.get(test_name)

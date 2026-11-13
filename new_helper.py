@@ -9,11 +9,15 @@ from datetime import datetime
 from pywifi import const
 
 import PyQt6.QtBluetooth as QtBt
-from PyQt6.QtWidgets import QApplication, QDialog, QGraphicsScene, QWidget, QButtonGroup, QGraphicsRectItem, QGraphicsLineItem
+from PyQt6.QtWidgets import QApplication, QDialog, QGraphicsScene, QWidget, QButtonGroup, QGraphicsRectItem, QGraphicsLineItem, QMessageBox
 from PyQt6.QtGui import QPen, QColor, QPixmap, QImage, QBrush, QStandardItemModel, QStandardItem
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer, QUrl, QObject, QByteArray
 from PyQt6 import uic
+
+Q_OK = QMessageBox.StandardButton.Ok
+Q_YES = QMessageBox.StandardButton.Yes
+Q_NO = QMessageBox.StandardButton.No
 
 def get_path(raw_path):
     try:
@@ -23,19 +27,39 @@ def get_path(raw_path):
     return ret
 
 class SettingsBox(QDialog):
-    def __init__(self):
+    def __init__(self, oprtr_en, shift):
         super().__init__()
         uic.loadUi(get_path('layout/settings_box.ui'), self)
+        self.oprtr_en_input.setText(oprtr_en)
+        self.shift_input.setCurrentText(shift)
         self.dev_button.clicked.connect(self.set_dev)
         self.prod_button.clicked.connect(self.set_prod)
-        self.mode = ''
+        self.output = {'oprtr_en': '', 'shift': '', 'mode': ''}
 
     def set_dev(self):
-        self.mode = 'DEVELOPMENT'
+        user = self.oprtr_en_input.text().strip()
+        shift = self.shift_input.currentText().strip()
+        if not (user and shift):
+            QMessageBox.information(self, 'Info', 'Please enter all details', Q_OK)
+            return
+        
+        # self.mode = 'DEVELOPMENT'
+        self.output['operator_en'] = user.upper()
+        self.output['shift'] = shift.upper()
+        self.output['mode'] = 'DEVELOPMENT'
         self.accept()
 
     def set_prod(self):
-        self.mode = 'PRODUCTION'
+        user = self.oprtr_en_input.text().strip()
+        shift = self.shift_input.currentText().strip()
+        if not (user and shift):
+            QMessageBox.information(self, 'Info', 'Please enter all details', Q_OK)
+            return
+        
+        self.output['operator_en'] = user.upper()
+        self.output['shift'] = shift.upper()
+        self.output['mode'] = 'PRODUCTION'
+        # self.mode = 'PRODUCTION'
         self.accept()
 
 class BtWifiWorker(QObject):

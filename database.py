@@ -75,14 +75,8 @@ class DatabaseConn:
                     conn.commit()
 
         except Exception as e:
-            print(f'Error: {e}')
-            # raise e
-        
-        except AttributeError as e:
-            return False, e
-
-        except TypeError as e:
-            return False, 'Database connection error'
+            # print(f'Error: {e}')
+            raise e
     
     def get_ble_mac(self, serial_num):
         try:
@@ -101,7 +95,11 @@ class DatabaseConn:
     
     def get_db_status(self, serial_num):
         try:
-            with self.connect(self.schema) as dbconn:
+            new_db = self.connect(self.schema)
+            if new_db is None:
+                return {'error': 'Database connection error'}
+            
+            with new_db as dbconn:
                 with dbconn.cursor(DictCursor) as cursor:
                     # Get PO number and station status from main
                     main_query = " SELECT * FROM " + self.main_table + " WHERE `serial_num` = %s "
@@ -125,7 +123,7 @@ class DatabaseConn:
                             response = cursor.fetchall()
                             curr_test_rep = len(response) + 1
                             if len(response) > 0 and response[0]['status'] == 1:
-                                return {'error': "Already passed"}
+                                return {'error': "Already passed", 'po_num': ponum, 'test_rep': curr_test_rep}
                             break
                         else:
                             # Check if unit did not pass a previous station
@@ -146,13 +144,14 @@ class DatabaseConn:
                         resp = cursor.fetchone()
                         if not resp or resp['farepair_status'] != 4:
                             return {'error': "No more retest allowed until FA"}
-                    #     else:
-                    #         return {'po_num': ponum, 'test_rep': curr_test_rep}
+                        else:
+                            return {'po_num': ponum, 'test_rep': curr_test_rep, 'need_pass': True}
                     # else:
                     return {'po_num': ponum, 'test_rep': curr_test_rep}
 
         except Exception as e:
             return {'error': str(e)}
+            # raise e
 
     def update_last_entry(self, cursor: DictCursor, serial_num: str):
         get_query = " SELECT `serial_num`, `test_rep` FROM " + self.table_name + " WHERE `serial_num` LIKE %s ORDER BY `test_rep` DESC"
@@ -160,7 +159,7 @@ class DatabaseConn:
         last_rep = cursor.fetchone()['test_rep']
 
         new_serial = f"{serial_num}_{last_rep}"
-        set_query = " UPDATE `"+ self.table_name +"` SET `serial_num` = %s WHERE `serial_num` = %s "
+        set_query = " UPDATE "+ self.table_name +" SET `serial_num` = %s WHERE `serial_num` = %s "
         cursor.execute(set_query, (new_serial, serial_num))
 
     def db_insert(self, head_details: dict, data: dict, tail_details: dict):
@@ -201,7 +200,8 @@ class DatabaseConn:
                     else:
                         return False, 'Error writing to database'
         except Exception as e:
-            return False, str(e)
+            # return False, str(e)
+            raise e
 
 # if __name__=='__main__':
 #     dbconn = DatabaseConn()

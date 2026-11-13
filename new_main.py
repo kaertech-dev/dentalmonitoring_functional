@@ -97,42 +97,47 @@ class MainWindow(QMainWindow):
         self.connect_PSupply()
 
         # buttons
-        self.login_button.clicked.connect(self.login)
+        # self.login_button.clicked.connect(self.login)
         self.start_test_button.clicked.connect(self.start_test)
         self.serialno_display.returnPressed.connect(self.validate_serial)
         self.settings_button.clicked.connect(self.open_settings)
         # self.abort_button.clicked.connect(self.abort_signal)
         # self.initialize_shortcuts()
 
-    def login(self):
-        if self.login_button.text() == 'LOGIN':
-            user = self.oprtr_en_input.text().strip().upper()
-            shift = self.shift_input.currentText().strip().upper()
+    # def login(self):
+    #     if self.login_button.text() == 'LOGIN':
+    #         user = self.oprtr_en_input.text().strip().upper()
+    #         shift = self.shift_input.currentText().strip().upper()
 
-            if user and shift:
-                # self.login_details = {'operator_en': user, 'shift': shift}
-                self.oprtr_en_input.setEnabled(False)
-                self.shift_input.setEnabled(False)
-                self.login_button.setText('LOGOUT')
-            else:
-                QMessageBox.information(self, 'Info', 'Please enter all details', Q_OK)
-        else:
-            # self.login_details = {'operator_en': '', 'shift': ''}
-            self.oprtr_en_input.setEnabled(True)
-            self.shift_input.setEnabled(True)
-            self.login_button.setText('LOGIN')
+    #         if user and shift:
+    #             # self.login_details = {'operator_en': user, 'shift': shift}
+    #             self.oprtr_en_input.setEnabled(False)
+    #             self.shift_input.setEnabled(False)
+    #             self.login_button.setText('LOGOUT')
+    #         else:
+    #             QMessageBox.information(self, 'Info', 'Please enter all details', Q_OK)
+    #     else:
+    #         # self.login_details = {'operator_en': '', 'shift': ''}
+    #         self.oprtr_en_input.setEnabled(True)
+    #         self.shift_input.setEnabled(True)
+    #         self.login_button.setText('LOGIN')
 
     def open_settings(self):
-        mode_box = SettingsBox()
+        mode_box = SettingsBox(self.oprtr_display.text(), self.shift_display.text())
         result = mode_box.exec()
 
         if result:
-            if mode_box.mode == 'DEVELOPMENT':
+            self.oprtr_display.setText(mode_box.output['operator_en'])
+            self.shift_display.setText(mode_box.output['shift'])
+            if mode_box.output['mode'] == 'DEVELOPMENT':
                 self.mode_label.setText('DEVELOPMENT')
                 self.mode_label.setStyleSheet("background-color: rgb(170, 255, 255);")
             else:
                 self.mode_label.setText('PRODUCTION')
                 self.mode_label.setStyleSheet("background-color: rgb(255, 255, 0);")
+            
+            # self.load_config()
+            # self.init_test_variables()
 
     def load_config(self) -> dict:
         parser = configparser.ConfigParser()
@@ -266,9 +271,13 @@ class MainWindow(QMainWindow):
 
     def validate_serial(self):
         try:
-            if self.login_button.text() == 'Login':
+            user = self.oprtr_display.text()
+            shift = self.shift_display.text()
+            if not (user and shift):
+                # if self.mode_label.text() == 'PRODUCTION':
                 QMessageBox.information(self, 'Info', 'Please login to start testing', buttons=QMessageBox.StandardButton.Ok)
-                self.oprtr_en_input.setFocus()
+                QTimer.singleShot(10, self.open_settings)
+                self.serialno_display.setText('')
                 return False
             
             self.clear_table()
@@ -347,8 +356,14 @@ class MainWindow(QMainWindow):
         self.add_row('ip_address', ipaddress, 'PASS')
 
     def insert_status(self, received: dict):
-        for key, value in received.items():
-            self.add_row(key, value, 'PASS')
+        # for key, value in received.items():
+        #     self.add_row(key, value, 'PASS')
+        fw_ver = received.get('firmware_version')
+        batt_mv = received.get('battery_voltage_mv')
+        self.add_row('fw_version', fw_ver, 'PASS')
+        self.add_row('batt_mv', batt_mv, 'PASS')
+
+        QTimer.singleShot(10, )
 
     def write_csv(self):
         now = datetime.now()
