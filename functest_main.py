@@ -7,15 +7,16 @@ import json
 import serial
 import subprocess
 import configparser
-from datetime import datetime
+from datetime import datetime, time as dtime
 
 from PyQt6 import uic
 from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QInputDialog, QLineEdit
 from PyQt6.QtGui import QImage, QPixmap, QShortcut, QKeySequence, QStandardItemModel, QStandardItem
 from PyQt6.QtCore import QTimer, Qt
 
-from database import DatabaseConn
+from database import DatabaseConn, GoldenSample
 from helper_classes import HTTPRequest, SettingsBox, StackedUI
+from goniometer import Goniometer
 
 # import logging
 # logger = logging.getLogger(__name__)
@@ -72,9 +73,6 @@ class MainWindow(QMainWindow):
         self.auto_abort_timer = QTimer()
         self.auto_abort_timer.setInterval(1000 * 45)
         self.auto_abort_timer.timeout.connect(lambda: self.add_fail_reason('TEST TIMEOUT'))
-
-        self.golden_tested_flag = None
-        self.golden_sn = None
         
         if self.device_model == 'S3':
             self.bar_step = 100 / 53
@@ -83,9 +81,7 @@ class MainWindow(QMainWindow):
         self.start_test_button.setEnabled(False)
 
         self.http_manager = HTTPRequest(self)
-        self.stacker = StackedUI(10, self.config['cam_source'], self.config['cam_params'], 
-                                 self.test_limits, self.config['dut_ssid'], self.config['dut_password'],
-                                 self.config['use_lan'])
+        self.stacker = StackedUI(self.test_limits, self.config)
         # self.stacker.fail_reason.connect(self.add_fail_reason)
         self.stacker.alt_signal.connect(self.alt_meas_end)
         self.stacker.led_okay.connect(self.led_catcher)
@@ -217,10 +213,10 @@ class MainWindow(QMainWindow):
         self.settings_button.setEnabled(state)
 
     def init_test_variables(self):
-        try:
-            self.goniometer.set_home()
-        except:
-            pass
+        # try:
+        #     self.goniometer.set_home()
+        # except:
+        #     pass
         
         self.current_serial = ''
         self.mac_address = ''
@@ -294,14 +290,20 @@ class MainWindow(QMainWindow):
         self.serialno_display.setFocus()
         self.serialno_display.textChanged.connect(self.reinit)
 
+        # now = datetime.now().time()
+        # end_A = dtime(19,0,0)
+        # end_B = dtime(7,0,0)
+        # if self.golden_tested_flag == True:
+        #     if now >= end_A or now >= end_B:
+        #         self.golden_tested_flag = False
+
     def upload_results(self):
         self.messages.setText('Uploading results...')
         self.write_csv()
         if self.mode_label.text() == 'PRODUCTION':
             try:
-                if self.current_serial == self.golden_sn:
-                    self.dbconn.log_golden_test(self.config['tester_code'], self.golden_sn, self.tail_details['status'])
-                    self.golden_tested_flag = True
+                if self.current_serial == self.golden_sample.serial():
+                    self.golden_sample.log_test(self.tail_details['status'])
                 else:
                     success, error_code = self.dbconn.db_insert(self.head_details, self.bringup_results, self.tail_details)
                     if not success:
@@ -327,7 +329,7 @@ class MainWindow(QMainWindow):
             self.stacker.wifi_widget.forget_network()
             self.enable_supply(False)
 
-            if self.stacker.wifi_widget.restored:
+            if self.config['use_lan'] or self.stacker.wifi_widget.restored:
                 QTimer.singleShot(10, self.auto_fail_end)
             else:
                 try:
@@ -395,7 +397,7 @@ class MainWindow(QMainWindow):
             self.stacker.wifi_widget.maintain_conn(True)
             QTimer.singleShot(500, self.upload_results)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Processing', str(e), Q_OK)
 
     def charging_status(self):
         try:
@@ -418,7 +420,7 @@ class MainWindow(QMainWindow):
             else:
                 self.stacker.wifi_widget.net_restored.connect(self.process_values)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Charging End', str(e), Q_OK)
 
     # Step 8. Charging Test
     def charging_test(self):
@@ -432,7 +434,7 @@ class MainWindow(QMainWindow):
                 self.stacker.done_stream.disconnect(self.close_stream)
             except TypeError:
                 pass
-            self.stacker.s6_chrg.setChecked(True)
+            self.stacker.s7_chrg.setChecked(True)
 
             if self.hw_serial:
                 self.hw_timer.start(1000)
@@ -440,43 +442,69 @@ class MainWindow(QMainWindow):
             self.stacker.wifi_widget.forget_network()
             QTimer.singleShot(5000, self.charging_status)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Charging Start', str(e), Q_OK)
+
+    def led_405_off(self):
+        try:
+            self.auto_abort_timer.start()
+            print('--- UV Light OFF')
+            content = self.http_manager.read_response('uv')
+
+            res = QMessageBox.question(self.stacker, 'Info', 'Are the UV LEDs turned on?', buttons=Q_YES | Q_NO)
+            if res == Q_YES:
+                self.append_result('led_uv', '-', 'PASS')
+                self.http_manager.put('uv', 
+                                        f'http://{self.device_ip}/torch-mode', 
+                                        'text/plain', 
+                                        'off',
+                                        self.charging_test,
+                                        100)
+                # QTimer.singleShot(10, self.s3_calibration)
+            else:
+                self.append_result('led_uv', '-', 'FAIL', 'LED_FAIL')
+                QTimer.singleShot(10, self.auto_fail)
+                return
+            
+        except Exception as e:
+            QMessageBox.warning(self, '405 Off', str(e), Q_OK)
+
+    def led_405_on(self):
+        try:
+            self.auto_abort_timer.start()
+            print('--- UV Light ON')
+            self.messages.setText('Turning on UV Light...')
+            self.http_manager.put('uv', 
+                                    f'http://{self.device_ip}/torch-mode', 
+                                    'text/plain', 
+                                    'fluorescent')
+            QTimer.singleShot(1000, self.led_405_off)
+        except Exception as e:
+            QMessageBox.warning(self, '405 On', str(e), Q_OK)
 
     # Step 7 end
     def close_stream(self, curr_cam):
         try:
             self.auto_abort_timer.start()
-            # idx = len(self.stream_results)
-            # curr_cam = self.camera_list[idx]
-            # t_name = curr_cam + '_stream'
 
             if 'STREAM_FAIL' not in self.fail_reasons:
                 self.bringup_results['streaming'] = 1
                 self.append_result('stream', '-', 'PASS')
                 
-            # if self.device_model == 'S3' and len(self.stream_results) < 3:
-            #     QTimer.singleShot(1, self.get_stream)
-            #     return
-
             # self.stacker.wifi_widget.maintain_conn()
-            self.http_manager.put('white', 
-                                f'http://{self.device_ip}/torch-mode', 
-                                'text/plain', 
-                                'off', 
-                                self.charging_test,
-                                100)
+            # self.http_manager.put('white', 
+            #                     f'http://{self.device_ip}/torch-mode', 
+            #                     'text/plain', 
+            #                     'off', 
+            #                     self.charging_test,
+            #                     100)
+            QTimer.singleShot(10, self.led_405_on)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Close Stream', str(e), Q_OK)
 
     # Step 7. Streaming & Connectivity Test
     def get_stream(self):
         self.messages.setText('Starting stream...')
         self.auto_abort_timer.start()
-        # idx = len(self.stream_results)
-        # curr_cam = self.camera_list[idx]
-        # t_name = curr_cam + '_stream'
-
-        # self.stacker.wifi_widget.maintain_conn()
 
         try:
             stream_link = f'http://{self.device_ip}/preview-stream?camera=center'
@@ -484,51 +512,85 @@ class MainWindow(QMainWindow):
             self.stacker.stream_start(stream_link)
 
         except Exception as e:
-            resp = QMessageBox.critical(self, 'Error', str(e), Q_YES)
-            self.stream_results['center'] = 0
+            resp = QMessageBox.critical(self, 'Start Stream', str(e), Q_YES)
             self.append_result('stream', '-', 'FAIL', 'STREAM_FAIL')
             QTimer.singleShot(10, self.auto_fail)
             return
 
-    # # Step 6.4: Calibrate
-    # def retrieve_s3_img(self):
-    #     if not self.calib_images['left']:
-    #         self.calib_images['left'] = self.http_manager.read_response('left')
-    #     if not self.calib_images['right']:
-    #         self.calib_images['right'] = self.http_manager.read_response('right')
+    # Step 6.5 Validate
+    def s3_validate(self):
+        # self.pose_index starts at 30 here, until 39
+        pass
 
-    #     if self.calib_images['left'] and self.calib_images['right']:
-    #         # calibration process
-    #         self.pose_index += 1
-    #         QTimer.singleShot(1, self.get_s3_img)
+    # next step
+    def s3_looper(self):
+        if self.cradle_position == 80:
+            self.pose_index = 0
+            self.cradle_position = 110
+            self.goniometer.setHome()
+            res = QMessageBox.information(self, 'Info', 'Lift the cradle to 110mm position', Q_OK)
+            QTimer.singleShot(1, self.get_s3_img)
+            return
+        else:
+            QTimer.singleShot(10, self.s3_validate)
 
-    # # Step 6.3: Get Image IDs
-    # def read_s3_img(self):
-    #     req_id = 'calib_' + self.pose_index
-    #     image_ids = self.http_manager.read_response(req_id)
-    #     left_id = image_ids['left']
-    #     right_id = image_ids['right']
+    # Step 6.4: Calibrate
+    def retrieve_s3_img(self):
+        roll, pitch, yaw = self.s3_calib_poses.get(self.pose_index)
+        if not self.calib_images[self.pose_index][f'left_{self.cradle_position}']:
+            left_resp = self.http_manager.read_response('left')
+            filename = self.stacker.save_image(self.current_serial, f"L{self.pose_index}", left_resp)
+            self.calib_images[self.pose_index][f'left_{self.cradle_position}'] = filename
+            return
+        
+        if not self.calib_images[self.pose_index][f'right_{self.cradle_position}']:
+            right_resp = self.http_manager.read_response('right')
+            filename = self.stacker.save_image(self.current_serial, f"R{self.pose_index}", right_resp)
+            self.calib_images[self.pose_index][f'right_{self.cradle_position}'] = filename
+            return
 
-    #     self.calib_images = {'left': None, 'right': None}
-    #     self.http_manager.get('left', f'http://{self.device_ip}/photos/{left_id}', self.retrieve_s3_img)
-    #     self.http_manager.get('right', f'http://{self.device_ip}/photos/{right_id}', self.retrieve_s3_img)
+        if self.calib_images[self.pose_index][f'left_{self.cradle_position}'] and self.calib_images[self.pose_index][f'right_{self.cradle_position}']:
+            roll, pitch, yaw = self.s3_calib_poses.get(self.pose_index)
+            self.stacker.show_positions(roll, pitch, yaw)
+            self.pose_index += 1
+            QTimer.singleShot(1, self.get_s3_img)
 
-    # # Step 6.2: Trigger capture
-    # def get_s3_img(self):
-    #     if self.pose_index == len(self.s3_calib_poses):
-    #         QTimer.singleShot(1, self.get_stream)
-    #         return
+    # Step 6.3: Get Image IDs
+    def read_s3_img(self):
+        req_id = 'calib_' + self.pose_index
+        image_ids = self.http_manager.read_response(req_id)
+        left_id = image_ids['left']
+        right_id = image_ids['right']
 
-    #     roll, pitch, yaw = self.s3_calib_poses.get(self.pose_index)
-    #     self.goniometer.set_pos(roll, pitch, yaw)
+        # self.calib_images[self.pose_index] = {'left_80': None, 'right_80': None, 'left_110': None, 'right_110': None}
+        self.http_manager.get('left', f'http://{self.device_ip}/photos/{left_id}', self.retrieve_s3_img)
+        self.http_manager.get('right', f'http://{self.device_ip}/photos/{right_id}', self.retrieve_s3_img)
 
-    #     req_id = 'calib_' + self.pose_index
-    #     self.http_manager.post(req_id, f'http://{self.device_ip}/take-pictures', self.read_s3_img)
+    # Step 6.2: Trigger capture
+    def get_s3_img(self):
+        if self.pose_index == 30: # 30 pairs for calibration, 10 pairs for validation
+            QTimer.singleShot(1, self.s3_looper)
+            return
 
-    # # Step 6.1: S3 Calibration
-    # def s3_calibration(self):
-    #     self.pose_index = 0
-    #     QTimer.singleShot(1, self.get_s3_img)
+        roll, pitch, yaw = self.s3_calib_poses.get(self.pose_index)
+        self.goniometer.setPos(roll, pitch, yaw)
+
+        req_id = 'calib_' + self.pose_index
+        self.http_manager.post(req_id, f'http://{self.device_ip}/take-pictures', self.read_s3_img)
+
+    # Step 6.1: S3 Calibration
+    def s3_calibration(self):
+        try:
+            res = QMessageBox.information(self, 'Info', 'Ensure the cradle is lowered to 80mm position', Q_OK)
+            self.pose_index = 0
+            self.cradle_position = 80
+            self.calib_images = [{'left_80': None, 'right_80': None, 'left_110': None, 'right_110': None} for i in self.s3_calib_poses]
+            self.goniometer.setHome()
+            QTimer.singleShot(1, self.get_s3_img)
+        except Exception as e:
+            res = QMessageBox.warning(self, 'S3 Calibration', str(e), Q_OK)
+            QTimer.singleShot(10, self.auto_fail)
+            return
 
     # Step 4 end
     def torch_enabled(self):
@@ -551,7 +613,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(10, self.auto_fail)
                 return
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Torch Off', str(e), Q_OK)
 
     # Step 4: White LED Test
     def torch_test(self):
@@ -566,9 +628,9 @@ class MainWindow(QMainWindow):
                                 'text/plain', 
                                 'white')
             # self.http_manager.put('fluorescent', f'http://{self.device_ip}/torch-mode', 'text/plain', 'fluorescent')
-            QTimer.singleShot(2000, self.torch_enabled)
+            QTimer.singleShot(1000, self.torch_enabled)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Torch On', str(e), Q_OK)
 
     def led_catcher(self, lumi_val):
         self.bringup_results['led_white'] = round(lumi_val, 3)
@@ -618,7 +680,7 @@ class MainWindow(QMainWindow):
                 except TypeError:
                     pass
                 # if self.device_model == 'S3':
-                #     QTimer.singleShot(1, self.s3_calibration)
+                #     QTimer.singleShot(1, self.led_405_on)
                 # else:
                 QTimer.singleShot(1, self.get_stream)
         except Exception as e:
@@ -635,7 +697,7 @@ class MainWindow(QMainWindow):
         try:
             self.auto_abort_timer.start()
             t_name = f'{cam_name}_cam_{mode}'
-            print(f"--- RESULTS: {cam_name} {mode}")
+            print(f"--- RESULTS: {cam_name} {mode} {status}")
             if status == 1:
                 self.cam_results[mode].update({cam_name: 1})
                 self.append_temp(t_name, '-', 'PASS')
@@ -651,7 +713,7 @@ class MainWindow(QMainWindow):
             else:
                 QTimer.singleShot(1, self.next_step)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, f'Image Results - {self.current_mode}', str(e), Q_OK)
 
     # Step 3.2/5.2: Measure dark/lit frame parameters
     def start_measure(self, cam_name, mode):
@@ -677,7 +739,7 @@ class MainWindow(QMainWindow):
                 return
                 # QTimer.singleShot(1, self.next_step)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, f'Measure - {self.current_mode}', str(e), Q_OK)
 
     # For S3 model, receive left and right images into buffer
     def buffer(self, cam_name, id):
@@ -737,7 +799,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(10, self.process_values)
                 return
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, f'Read Image - {self.current_mode}', str(e), Q_OK)
 
     # Step 2 loopback/end
     def off_led_status(self):
@@ -761,7 +823,7 @@ class MainWindow(QMainWindow):
                                     self.read_image_id,
                                     1000)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Indicator LED', str(e), Q_OK)
 
     def off_request(self):
         try:
@@ -774,7 +836,7 @@ class MainWindow(QMainWindow):
                                 self.off_led_status,
                                 100)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Indicator LED - Off', str(e), Q_OK)
 
     # Step 2 loop: turn off LED
     def read_led_status(self):
@@ -812,7 +874,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(10, self.auto_fail)
                 return
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Indicator LED - Read', str(e), Q_OK)
 
     # Step 2 loop: turn on LED
     def get_led_status(self):
@@ -828,7 +890,7 @@ class MainWindow(QMainWindow):
                                 self.read_led_status,
                                 100)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Indicator LED - Get', str(e), Q_OK)
 
     def __reset_leds(self):
         for col in self.ui_colors:
@@ -852,7 +914,7 @@ class MainWindow(QMainWindow):
             # Some delay to wait for LEDs to turn off
             QTimer.singleShot(1500, self.get_led_status)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Indicator LED - Start', str(e), Q_OK)
 
     # Step 1 end
     def read_device_status(self):
@@ -892,7 +954,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(10, self.auto_fail)
                 return
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Device Status', str(e), Q_OK)
 
     def fail_catcher(self, fail_reason):
         if self.bt_wifi_retries > 0:
@@ -949,7 +1011,7 @@ class MainWindow(QMainWindow):
                                 self.read_device_status,
                                 1500)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'DUT Pairing', str(e), Q_OK)
 
     # Step 0: DUT Scanning & Pairing
     def get_device_mac(self):
@@ -983,7 +1045,7 @@ class MainWindow(QMainWindow):
             self.bt_wifi_retries = 2
             self.stacker.start_bt_scan(self.mac_address)
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Device MAC', str(e), Q_OK)
 
     def start_test(self):
         try:
@@ -1007,7 +1069,8 @@ class MainWindow(QMainWindow):
             self.head_details['po_num'] = self.ponum_display.text().upper()
             if len(self.config['tester_code']) > 0:
                 self.head_details['tester_code'] = self.config['tester_code'].upper()
-            self.head_details.update(self.login_details)
+            self.head_details['operator_en'] = self.oprtr_display.text()
+            self.head_details['shift'] = self.shift_display.text()
             self.enable_buttons(False)
 
             try:
@@ -1030,7 +1093,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(1, self.get_device_mac)
             
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Test Start', str(e), Q_OK)
 
     def validate_serial(self):
         self.stacker.wifi_widget.maintain_conn(True)
@@ -1045,20 +1108,22 @@ class MainWindow(QMainWindow):
                 return False
 
             self.init_test_variables()
-            self.current_serial = self.serialno_display.text()
-            if not self.current_serial:
+            self.current_serial = self.serialno_display.text().upper()
+            if self.current_serial == '':
                 QMessageBox.information(self, 'Info', 'Enter serial number to test', buttons=Q_OK)
                 self.serialno_display.setFocus()
                 return False
             
-            self.current_serial = self.current_serial.upper()
-            if self.mode_label.text() == 'PRODUCTION':
-                self.golden_tested_flag, self.golden_sn = self.dbconn.get_golden_logs(self.config['tester_code'])
-                # print(self.golden_tested_flag, self.golden_sn)
-                if self.current_serial != self.golden_sn:
-                    if not self.golden_tested_flag:
-                        QMessageBox.critical(self, 'Error', 'Please test the Golden Sample first', Q_OK)
-                        return False
+            if self.mode_label.text() == 'PRODUCTION' and not self.golden_sample.logged():
+                # GS has not been tested for the shift
+                if self.current_serial != self.golden_sample.serial():
+                    # Entered serial is not GS
+                    QMessageBox.critical(self, 'Error', 'Please test the Golden Sample first', Q_OK)
+                    return False
+                else:
+                    # Entered serial is GS
+                    self.start_test_button.setEnabled(True)
+                    return True
 
             db_status = self.dbconn.get_db_status(self.current_serial)
             if 'Database connection error' in db_status.get('error', ''):
@@ -1086,7 +1151,7 @@ class MainWindow(QMainWindow):
             self.start_test_button.setEnabled(True)
             return True
         except Exception as e:
-            QMessageBox.warning(self, 'Error', str(e), Q_OK)
+            QMessageBox.warning(self, 'Validate', str(e), Q_OK)
 
     def load_s3_calib(self):
         self.s3_calib_poses = {}
@@ -1098,6 +1163,8 @@ class MainWindow(QMainWindow):
                     self.s3_calib_poses[row[0]] = (float(row[1]), float(row[2]), float(row[3]))
                 except ValueError:
                     continue
+
+        print(self.s3_calib_poses)
         
         # params_file = self.config['limits_path']
         # with open(params_file, 'r') as limits_file:
@@ -1126,41 +1193,48 @@ class MainWindow(QMainWindow):
             self.config[key.lower().replace(' ', '_')] = value
 
         if 'Database' in parser.sections():
-            db_host = parser.get('Database', 'Host')
-            db_schema = parser.get('Database', 'Customer')
-            db_model = parser.get('Database', 'Model')
-            db_station = parser.get('Database', 'Station')
+            db_config = {}
+            for key, raw_value in parser['Database'].items():
+                key_std = key.lower().replace(' ', '_')
+                db_config[key_std] = raw_value.strip('"')
 
-            self.config['database'] = {'host': db_host, 'customer': db_schema, 'model': db_model, 'station': db_station}
+            db_model = db_config.get('model', '').upper()
+            self.config['database'] = db_config
             self.config['use_lan'] = parser.getboolean('Database', 'LAN')
             self.dbconn = DatabaseConn(self.config['database'])
+            # self.golden_sample = GoldenSample(db_model, self.config.get('tester_code', ''))
+            self.golden_sample = GoldenSample('Soniquemini', 'LSMPPRGT-01-0004648')
             if 'S3' in db_model and 'M1' not in db_model:
                 self.device_model = 'S3'
             else:
                 self.device_model = 'M1'
             self.model_display.setText(db_model)
         else:
-            self.config['database'] = None
+            self.config['database'] = {}
             self.dbconn = None
+            self.golden_sample = None
 
         if 'Camera' in parser.sections():
-            cam_src = parser.getint('Camera', 'Source')
-            cam_exp = parser.getint('Camera', 'Exposure')
-            cam_focus = parser.getint('Camera', 'Focus')
-            cam_zoom = parser.getint('Camera', 'Zoom')
-            self.config['cam_source'] = cam_src
-            self.config['cam_params'] = {'exposure': cam_exp, 'focus': cam_focus, 'zoom': cam_zoom}
-        else:
-            self.config['cam_source'] = 0
-            self.config['cam_params'] = None
+            cam_params = {}
+            for key, raw_value in parser['Camera'].items():
+                key_std = key.lower().replace(' ', '_')
+                cam_params[key_std] = int(raw_value.strip('"'))
 
-        if self.device_model == 'S3':
-            try:
-                from goniometer import GonioPiezo
-                self.goniometer = GonioPiezo(self.config['gnm2_serial'], self.config['gnm3_serial'], self.config['pdxc2_serial'])
-                self.load_s3_calib()
-            except:
-                self.messages.setText('GNM2, GNM3, PDXC2 not detected')
+            self.config['cam_params'] = cam_params
+        else:
+            self.config['cam_params'] = {}
+        
+        if self.device_model == 'S3' and 'LumyoS3' in parser.sections():
+            pdxc2_serial = parser.get('LumyoS3', 'PDXC2 Serial')
+            gnm2_serial = parser.get('LumyoS3', 'GNM2 Serial')
+            gnm3_serial = parser.get('LumyoS3', 'GNM3 Serial')
+
+            self.config['3-axis'] = {'pdxc2': pdxc2_serial, 'gnm2': gnm2_serial, 'gnm3': gnm3_serial}
+            self.goniometer = Goniometer(self.config['3-axis'])
+            self.load_s3_calib()
+        else:
+            self.config['3-axis'] = {}
+            self.messages.setText('GNM2, GNM3, PDXC2 not detected')
 
     def write_csv(self):
         now = datetime.now()
@@ -1183,7 +1257,7 @@ class MainWindow(QMainWindow):
         response = QMessageBox.question(self, 'Exit app', "Confirm exit?", Q_YES|Q_NO)
         if response == Q_YES:
             try:
-                self.goniometer.stop_disconnect()
+                self.goniometer.disconnect()
             except:
                 pass
             self.stacker.destroy()
@@ -1192,7 +1266,6 @@ class MainWindow(QMainWindow):
             event.ignore()
 
 if __name__=='__main__':
-    # CLI_PREFIX = os.getenv('CLI_PREFIX', 'C:\\Users\\ai\\')
     app = QApplication(sys.argv)
     app.setStyle('windowsvista')
     window = MainWindow('v1.2.2')

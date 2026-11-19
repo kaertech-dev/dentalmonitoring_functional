@@ -13,6 +13,8 @@ from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkRepl
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer, QUrl, QObject, QByteArray
 from PyQt6 import uic
 
+from goniometer import GWorker as Goniometer
+
 Q_OK = QMessageBox.StandardButton.Ok
 Q_YES = QMessageBox.StandardButton.Yes
 Q_NO = QMessageBox.StandardButton.No
@@ -625,12 +627,16 @@ class StackedUI(QDialog):
     fail_reason = pyqtSignal(str)
     alt_signal = pyqtSignal(dict)
 
-    def __init__(self, duration, cam_source, cam_params, test_limits, dut_ssid, dut_pass, lan_conn):
+    def __init__(self, test_limits: dict, config: dict):
         super().__init__()
-        uic.loadUi(get_path('layout/widget_stack.ui'), self)
+        uic.loadUi(get_path('layout/widget_stack_s3.ui'), self)
 
         self.dut.setPixmap(QPixmap(get_path(r"static/camera3_vid-0")))
         self.bench_pc.setPixmap(QPixmap(get_path(r"static/computer-2.png")))
+
+        dut_ssid = config.get('dut_ssid')
+        dut_pass = config.get('dut_password')
+        lan_conn = config.get('use_lan', False)
 
         self.bt_widget = Bluetooth(dut_ssid, dut_pass, self)
         self.wifi_widget = WifiThread(dut_ssid, dut_pass, lan_conn)
@@ -638,9 +644,13 @@ class StackedUI(QDialog):
         self.bt_widget.fail_reason.connect(self.fail_reason.emit)
         self.wifi_widget.fail_reason.connect(self.fail_reason.emit)
 
+        # self.gonio_widget = Goniometer(config.get('3-axis'))
+
         self.ui_led_results = {}
         self.test_limits = test_limits
 
+        cam_params = config.get('cam_params')
+        cam_source = cam_params.get('source')
         self.camera = SingletonCamera(cam_source)
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
@@ -651,10 +661,7 @@ class StackedUI(QDialog):
             self.camera.set(cv2.CAP_PROP_ZOOM, cam_params['zoom'])
 
         self.vthread = VideoThread(cam_source)
-        # self.stream_timeout = QTimer()
-        # self.stream_timeout.timeout.connect(self.stream_stop)
-        # self.stream_timeout.setInterval(duration*1000)
-        self.stream_dur = duration
+        self.stream_dur = config.get('stream_duration', 10)
 
         self.charging_widget = ChargingWidget(self)
 
@@ -663,8 +670,9 @@ class StackedUI(QDialog):
                             self.s2_dft: self.dft_viewer,
                             self.s3_lft80: self.lft_80_viewer,
                             self.s4_lft110: self.lft_110_viewer,
+                            self.s6_calibration: self.calibration,
                             self.s5_stream: self.stream_viewer,
-                            self.s6_chrg: self.chrg_widget}
+                            self.s7_chrg: self.chrg_widget}
         
         self.side_tabs = QButtonGroup()
         for idx, button in enumerate(self.widget_list.keys(), 1):
@@ -905,7 +913,7 @@ class StackedUI(QDialog):
             try:
                 # sharpness method 1:
                 laplacian = cv2.Laplacian(grayscale, cv2.CV_64F)
-                variance = laplacian.var()
+                variance = round(laplacian.var().items(), 2)
                 print('lapvar', variance) # higher value = sharper
 
                 # sharpness method 2:
@@ -975,8 +983,8 @@ class StackedUI(QDialog):
         for key, value in raw_values.items():
             param_name = key.split('_')[-1]
             limits = params_list.get(param_name)
-            # print(key, value, limits)
-            if not limits:
+            print(key, value, limits)
+            if not limits or value is None:
                 continue
 
             if 'maximum' in limits:
@@ -1012,6 +1020,24 @@ class StackedUI(QDialog):
         except:
             pass
         self.vthread.stop()
+    
+    def save_image(self, serial, suffix, image_data):
+        filename = f"S3/{serial}_{suffix}.jpg"
+        cv2.imwrite(filename, image_data)
+        pixmap = QPixmap()
+        pixmap.loadFromData(image_data)
+
+        if suffix[0] == 'L':
+            self.left_cam.setPixmap(pixmap)
+        else:
+            self.right_cam.setPixmap(pixmap)
+
+        return filename
+
+    def show_positions(self, roll, pitch, yaw):
+        self.calib_roll.setText(roll)
+        self.calib_pitch.setText(pitch)
+        self.calib_yaw.setText(yaw)
 
     def onTop(self):
         if not self.isVisible():

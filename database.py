@@ -38,30 +38,36 @@ class DatabaseConn:
         try:
             with self.connect('te') as conn:
                 with conn.cursor(DictCursor) as cursor:
+                    # Check masterlist if GS exists
+                    master_query = " SELECT `golden_sn` FROM `golden_sample_masterlist` WHERE `tester_code` = %s "
+                    cursor.execute(master_query, (tester_code,))
+                    golden_sn = cursor.fetchone()
+                    if golden_sn is None:
+                        # No registered golden sample yet
+                        return 1, ''
+
                     today = datetime.now()
                     am = time(7,0,0)
                     pm = time(19,0,0)
                     # Set shift start/end
-                    if today.time() >= am and today.time() < pm:
-                        shift = [datetime.combine(today.date(), am), datetime.combine(today.date(), pm)]
-                    else:
+                    if today.time() < am:
+                        shift = [datetime.combine(today.date()-timedelta(days=1), pm), datetime.combine(today.date(), am)]
+                    elif today.time() >= pm:
                         shift = [datetime.combine(today.date(), pm), datetime.combine(today.date()+timedelta(days=1), am)]
-
-                    query = " SELECT * FROM `golden_sample_logs` WHERE `tester_code` = %s ORDER BY `date_time_tested` DESC LIMIT 5"
-                    cursor.execute(query, (tester_code,))
-                    logs = cursor.fetchall()
-
-                    if len(logs) == 0:
-                        query = " SELECT `golden_sn` FROM `golden_sample_masterlist` WHERE `model` = 'Dental Monitoring' "
-                        cursor.execute(query)
-                        golden_sn = cursor.fetchone()
-                        return 0, golden_sn['golden_sn']
-
-                    golden_list = [row['golden_sn'] for row in logs]
-                    if logs[0]['date_time_tested'] >= shift[0] and logs[0]['date_time_tested'] <= shift[1]:
-                        return 1, golden_list[0]
                     else:
-                        return 0, golden_list[0]
+                        shift = [datetime.combine(today.date(), am), datetime.combine(today.date(), pm)]
+
+                    # Check if GS has been logged for the given shift
+                    query = " SELECT * FROM `golden_sample_logs` WHERE `tester_code` = %s AND `date_time` BETWEEN %s AND %s"
+                    cursor.execute(query, (tester_code, shift[0], shift[1]))
+                    logs = cursor.fetchone()
+                    # print(logs)
+
+                    if logs is None:
+                        return 0, golden_sn['golden_sn']
+                    else:
+                        return 1, golden_sn['golden_sn']
+
         except Exception as e:
             return -1, str(e)
 
@@ -202,6 +208,110 @@ class DatabaseConn:
         except Exception as e:
             # return False, str(e)
             raise e
+
+class GoldenSample:
+    def __init__(self, model, tester_code):
+        self.config = {'host': '192.168.20.210',
+                        'user': DB_USER,
+                        'password': DB_PASSWORD,
+                        'database': 'te',
+                        'autocommit': False,
+                        'use_unicode': True,
+                        'charset': 'utf8mb4'
+                        }
+        self.tester_code = tester_code
+        self.model = model
+        self.golden_serial = ''
+
+        self._tested_for_curr_shift = False
+        self._current_shift = ''
+        self.set_shift()
+
+    def connect(self):
+        try:
+            return pymysql.connect(**self.config)
+        except pymysql.Error as e:
+            raise Exception(f"Database error: {e}")
+
+    def set_shift(self):
+        today = datetime.now()
+
+        # shift turnover = reset state
+        # otherwise, maintain current state
+        if today.time() >= time(7,0,0) and today.time() < time(19,0,0):
+            if self._current_shift != 'A':
+                self._current_shift = 'A'
+                self._tested_for_curr_shift = False
+        else:
+            if self._current_shift != 'B':
+                self._current_shift = 'B'
+                self._tested_for_curr_shift = False
+
+    def get_current_shift(self):
+        today = datetime.now()
+        am = time(7,0,0)
+        pm = time(19,0,0)
+        # Set shift start/end
+        if today.time() < am:
+            # Before 7AM, shift B started yesterday
+            shift = [datetime.combine(today.date()-timedelta(days=1), pm), datetime.combine(today.date(), am)]
+        elif today.time() >= pm:
+            # After 7PM, shift B ends tomorrow
+            shift = [datetime.combine(today.date(), pm), datetime.combine(today.date()+timedelta(days=1), am)]
+        else:
+            # shift A from 7AM to 7PM
+            shift = [datetime.combine(today.date(), am), datetime.combine(today.date(), pm)]
+
+        return shift
+
+    def _check_logs(self):
+        with self.connect() as dbconn:
+            with dbconn.cursor(DictCursor) as cursor:
+                master_query = " SELECT `golden_sn` FROM `golden_sample_masterlist` WHERE `tester_code` = %s "
+                cursor.execute(master_query, (self.tester_code,))
+                golden_sn = cursor.fetchone()
+                if golden_sn is None:
+                    # No registered golden sample yet
+                    return True
+
+                if self.golden_serial == '':
+                    self.golden_serial = golden_sn['golden_sn']
+
+                shift = self.get_current_shift()
+
+                # Check if GS has been logged for the given shift
+                query = " SELECT * FROM `golden_sample_logs` WHERE `tester_code` = %s AND `date_time_tested` BETWEEN %s AND %s"
+                cursor.execute(query, (self.tester_code, shift[0], shift[1]))
+                logs = cursor.fetchone()
+                print(logs)
+                print(self.golden_serial)
+
+                if logs is None:
+                    return False
+                else:
+                    self._tested_for_curr_shift = True
+                    return True
+
+    def logged(self):
+        self.set_shift()
+
+        if self._tested_for_curr_shift:
+            return True
+        else:
+            return self._check_logs()
+
+    def serial(self):
+        return self.golden_serial
+
+    def log_test(self, status):
+        with pymysql.connect(**self.config) as dbconn:
+            with dbconn.cursor(DictCursor) as cursor:
+                today = datetime.now()
+                query = " INSERT INTO `golden_sample_logs` VALUES (%s, %s, %s, %s, %s)"
+                cursor.execute(query, (self.tester_code, self.golden_serial, self.model, today, status))
+                dbconn.commit()
+        
+        self._tested_for_curr_shift = True
 
 # if __name__=='__main__':
 #     dbconn = DatabaseConn()

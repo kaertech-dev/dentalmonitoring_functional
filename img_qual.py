@@ -206,10 +206,10 @@ def http_api_test():
 
 if __name__=="__main__":
     # other_main()
-    # http_api_test()
+    http_api_test()
     # mtf_test()
     # results = {'lf80_reso': -1, 'lf80_contrast': 0.897, 
     #             'lf80_r2g': 1, 'lf80_b2g': 1, 
     #             'lf80_snr': 2.98765, 'lf80_dotgrid': -1}
     # get_final_status('lit_frame_80mm', results)
-    dotcenter()
+    # dotcenter()
